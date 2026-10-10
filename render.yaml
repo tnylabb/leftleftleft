@@ -1,0 +1,18 @@
+# Render blueprint for the game server (Node.js + Socket.IO).
+# Render: New > Blueprint > pick this repo.
+# The service also serves the built client, so its URL is a fully playable copy
+# of the game on its own. If you host the client elsewhere (GitHub Pages,
+# Netlify), set CORS_ORIGIN to that site's origin, e.g. https://your-name.github.io
+services:
+  - type: web
+    name: left-left-left-server
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: CORS_ORIGIN
+        sync: false

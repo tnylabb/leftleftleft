@@ -1,0 +1,10 @@
+# Netlify hosts only the static client. Multiplayer needs the Node.js game
+# server running elsewhere (see render.yaml / README "Deploying").
+# Set VITE_SERVER_URL in Netlify > Site configuration > Environment variables
+# to your game server's URL (e.g. https://left-left-left-server.onrender.com).
+[build]
+  command = "npm run build:client"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
