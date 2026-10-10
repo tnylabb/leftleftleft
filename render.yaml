@@ -1,0 +1,16 @@
+# Render blueprint for the multiplayer game server (Node.js + Socket.IO).
+# Render: New > Blueprint > pick this repo. Then set CORS_ORIGIN to your
+# Netlify URL (e.g. https://my-rally.netlify.app).
+services:
+  - type: web
+    name: left-left-left-server
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build:server
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: CORS_ORIGIN
+        sync: false

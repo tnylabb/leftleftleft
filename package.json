@@ -1,0 +1,40 @@
+{
+  "name": "left-left-left",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LEFT! LEFT! LEFT! - an asymmetrical two-player co-op rally game. Drive blind. Navigate loud. Survive the cabin.",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,client -c yellow,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:client": "vite",
+    "dev:server": "tsx watch --clear-screen=false server/index.ts --dev",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.server.json",
+    "build": "npm run typecheck && npm run build:client && npm run build:server",
+    "build:client": "vite build",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --target=node20 --packages=external --outfile=dist-server/index.js",
+    "start": "node dist-server/index.js",
+    "preview": "npm run build && npm start",
+    "test": "tsx scripts/sim-test.ts 42 && tsx scripts/cabin-test.ts",
+    "test:net": "tsx scripts/net-test.ts"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
+    "express": "^5.1.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.18.0",
+    "@types/three": "^0.186.0",
+    "concurrently": "^9.2.1",
+    "esbuild": "^0.25.10",
+    "tsx": "^4.20.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.0"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}

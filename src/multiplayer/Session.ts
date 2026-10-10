@@ -1,0 +1,78 @@
+// Common interface the game talks to, implemented by the online (Socket.IO)
+// session and the in-process local session (offline / couch / solo modes).
+
+import { EventBus } from '../core/EventBus';
+import type { StageLength } from '../shared/constants';
+import type { ImpactReport, MudReport } from '../shared/protocol';
+import type {
+  CalloutId,
+  CalloutMsg,
+  DoorSide,
+  DoorStates,
+  ImpactFx,
+  MudFx,
+  Pose,
+  RaceEvent,
+  RaceResults,
+  RaceStats,
+  Role,
+  RoomSnapshot,
+} from '../shared/types';
+
+export type ConnectionStatus = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'offline';
+
+export interface SessionEvents {
+  load: { seed: number; length: StageLength };
+  countdown: { endsAt: number };
+  go: { startedAt: number };
+  results: RaceResults;
+  paused: { paused: boolean; reason: string };
+  raceEvent: RaceEvent;
+  stats: RaceStats;
+  carState: Float32Array;
+  carTeleport: Pose;
+  carCorrection: Float32Array;
+  cabinState: Float32Array;
+  propsState: Float32Array;
+  impact: ImpactFx;
+  mud: MudFx;
+  wipe: { u: number; v: number };
+  doors: DoorStates;
+  wipers: boolean;
+  tabletOwner: Role | null;
+  callout: CalloutMsg;
+  hint: string;
+  room: RoomSnapshot;
+  connection: ConnectionStatus;
+  kicked: string;
+}
+
+export abstract class GameSession extends EventBus<SessionEvents> {
+  abstract readonly kind: 'online' | 'local';
+  abstract readonly localRoles: Role[];
+  /** Local clock in ms (performance.now timeline). */
+  now(): number {
+    return performance.now();
+  }
+  abstract sendCarState(buf: Float32Array): void;
+  abstract sendCabinState(buf: Float32Array): void;
+  abstract sendProps(buf: Float32Array): void;
+  abstract reportImpact(r: ImpactReport): void;
+  abstract reportMud(r: MudReport): void;
+  abstract sendWipe(u: number, v: number): void;
+  abstract reportTabletDrop(): void;
+  abstract requestReset(): void;
+  abstract closeDoor(side: DoorSide): void;
+  abstract setWipers(on: boolean): void;
+  abstract setTabletHeld(held: boolean): void;
+  abstract callout(id: CalloutId, text?: string): void;
+  abstract loaded(hash: number): void;
+  abstract restart(mode: 'retry' | 'new'): void;
+  abstract toLobby(): void;
+  abstract leave(): void;
+  tick(_dt: number): void {}
+  setPaused(_paused: boolean): void {}
+  get canPause(): boolean {
+    return this.kind === 'local';
+  }
+}
