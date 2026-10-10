@@ -46,21 +46,34 @@ npm start         # node dist-server/index.js: serves dist/ and Socket.IO on GAM
 Then open http://localhost:3001. To host for a friend over the internet, run `npm start` on a reachable
 machine (or behind a reverse proxy with WebSocket support) and share the URL.
 
-### Deploying (e.g. Netlify + a game server host)
+### Deploying
 
-Static hosts like **Netlify, Vercel, GitHub Pages or Cloudflare Pages can only serve the client**. They
+Static hosts like **GitHub Pages, Netlify, Vercel or Cloudflare Pages can only serve the client**. They
 cannot run the Socket.IO game server (it needs a long-running Node.js process holding WebSocket
 connections), so online play shows "Game server offline" there. Offline modes still work.
 
-Option A: one host for everything. Deploy the whole repo to a Node host with WebSocket support
-(Render, Railway, Fly.io, a VPS): build `npm ci --include=dev && npm run build`, start `npm start`. The
-server serves the client and multiplayer from the same URL; no extra configuration is needed.
+**Option A: Render only (simplest).** On [Render](https://render.com) use *New > Blueprint* and pick
+your repo; the included `render.yaml` builds and serves the whole game (client + multiplayer) from one URL.
+No other configuration is needed. (Any Node host with WebSocket support works the same way: build
+`npm ci --include=dev && npm run build`, start `npm start`; the server listens on the host's `PORT`.)
 
-Option B: keep the client on Netlify.
-1. Deploy the game server: on **Render** use *New > Blueprint* with the included `render.yaml` (or any
-   Node host: build `npm ci --include=dev && npm run build:server`, start `npm start`). The server listens
-   on the host's `PORT`.
-2. On the server set `CORS_ORIGIN` to your Netlify URL, e.g. `https://my-rally.netlify.app`.
+**Option B: GitHub Pages (client) + Render (game server).**
+1. Push the repo to GitHub and deploy the server on Render as in option A. Note its URL, e.g.
+   `https://left-left-left-server.onrender.com`.
+2. On Render, set the service's environment variable `CORS_ORIGIN` to your Pages origin, e.g.
+   `https://your-name.github.io` (no path, no trailing slash).
+3. On GitHub: *Settings > Secrets and variables > Actions > Variables*, add `VITE_SERVER_URL` = the Render
+   URL.
+4. On GitHub: *Settings > Pages > Source: GitHub Actions*. The included workflow
+   (`.github/workflows/pages.yml`) builds and publishes on every push to `main`; run it once manually
+   (*Actions > Deploy to GitHub Pages > Run workflow*) after adding the variable.
+5. Open `https://your-name.github.io/leftleftleft/`: the menu should say **Game server online**.
+
+The build uses relative asset paths, so it works both at a domain root and in a Pages sub-folder.
+
+**Option C: Netlify (client) + Render (game server).**
+1. Deploy the server on Render as in option A.
+2. On Render set `CORS_ORIGIN` to your Netlify URL, e.g. `https://my-rally.netlify.app`.
 3. In Netlify set the environment variable `VITE_SERVER_URL` to the server URL (e.g.
    `https://left-left-left-server.onrender.com`) and **redeploy**. Vite bakes it into the bundle at build
    time, so dragging an old `dist/` folder onto Netlify won't pick it up. Build with

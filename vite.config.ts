@@ -4,6 +4,9 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   const serverPort = Number(env.GAME_PORT || 3001);
   return {
+    // Relative asset paths so the same build works at a domain root (Render,
+    // Netlify) and in a sub-folder (GitHub Pages: https://user.github.io/repo/).
+    base: './',
     server: {
       host: true,
       port: Number(env.CLIENT_PORT || 5173),
