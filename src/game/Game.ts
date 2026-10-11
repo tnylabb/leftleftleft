@@ -148,6 +148,8 @@ export class Game {
   private footEnv!: FootEnv;
   private obstacleScratch: { x: number; z: number; r: number }[] = [];
   private stuckNoticeUntil = 0;
+  /** The next teleport is the automatic fall-off reset (not the emergency reset). */
+  private fellOffReset = false;
 
   // over the edge: third-person view of the fall
   private fallCam: FallCamera | null = null;
@@ -448,7 +450,8 @@ export class Game {
           this.cs.fromVehicle(this.vehicle, 1);
         }
         this.carBuf?.clear();
-        this.d.ui.toast(this.phase === 'racing' ? 'EMERGENCY RESET  +5s' : 'CAR RESET', 'info');
+        this.d.ui.toast(this.fellOffReset ? 'BACK TO THE LAST CHECKPOINT' : this.phase === 'racing' ? 'EMERGENCY RESET  +5s' : 'CAR RESET', 'info');
+        this.fellOffReset = false;
       }),
       s.on('carCorrection', (b) => {
         if (!this.vehicle) return;
@@ -509,6 +512,9 @@ export class Game {
         break;
       case 'finish':
         this.startFinish();
+        break;
+      case 'fellOff':
+        this.fellOffReset = true;
         break;
       case 'wrongWay':
         break;
