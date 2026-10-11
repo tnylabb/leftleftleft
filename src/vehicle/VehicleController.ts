@@ -437,7 +437,7 @@ export class VehicleController {
         const dir = new THREE.Vector3(d.x * sign, d.y * sign, d.z * sign).applyQuaternion(_q.clone().invert());
         const surf = this.physics.surfaceOf(other);
         const kind: ImpactFx['kind'] =
-          surf === 'tree' ? 'tree' : surf === 'rock' ? 'rock' : surf === 'bale' ? 'bale' : surf === 'road' || surf === 'grass' ? 'terrain' : 'other';
+          surf === 'tree' ? 'tree' : surf === 'rock' ? 'rock' : surf === 'bale' ? 'bale' : surf === 'animal' ? 'animal' : surf === 'road' || surf === 'grass' ? 'terrain' : 'other';
         this.stepImpact = { strength, dir: dir.normalize(), kind };
       }
     });

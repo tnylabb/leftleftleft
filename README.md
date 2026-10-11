@@ -162,7 +162,7 @@ live in `src/core/Bindings.ts`, and the overlay, pause screen and help screen ar
 | `V` | One wiper sweep (out and back to rest; holding doesn't repeat, press again for another) |
 | hold `C` | Wipe the windscreen by hand where you look (one hand off the wheel = less steering) |
 | `G` | Close your door if it flew open (left hand reaches for the handle) |
-| `H` | Horn |
+| `H` | Horn (also shoos cows off the road) |
 | `E` | Get out (car stopped) / get back in (standing at your door) |
 | hold `R` | Emergency reset onto the road: last resort, +5 s penalty |
 | Mouse (click to capture) | Look around, e.g. glance at the navigator's tablet |
@@ -186,6 +186,7 @@ away from the car (e.g. backwards with `S`) to pull; release to let go. `E` at y
 | `C` | Close your door |
 | `E` | Get out (car stopped) / get back in (standing at your door) |
 | `1`-`0` | Shout: LEFT! · LEFT, LEFT, LEFT! · RIGHT! · RIGHT, RIGHT, RIGHT! · BRAKE! · STRAIGHT! · NO, THE OTHER LEFT/RIGHT! · WE MISSED IT! · WHY ARE YOU STILL ACCELERATING?! · JUMP! |
+| `-` | Shout what is on the road ahead: COW! COW! COW! · SHEEP! SHEEP ON THE ROAD! · TRACTOR AHEAD! |
 | `Space` | Read the next pace note aloud (only if you can actually see the tablet - at night, lit by the lamp) |
 | `T` | Push-to-talk (if enabled for built-in voice chat) |
 
@@ -236,18 +237,53 @@ No key is shared between the two players:
   lost far off the route.
 
 ### Cockpit
-- Procedural interior: angular orange-red dash, analogue speedo/tach (canvas texture) with warning lights,
-  rotating steering wheel, gear selector, handbrake, animated pedals, bucket seats, roll cage, pillars,
-  sun visors, pine-tree air freshener on a spring, hood visible through the windscreen.
+- Procedural interior, painted in the livery's body colour like a stripped-out rally car: dark anti-glare
+  dash, analogue speedo/tach (canvas texture) with warning lights, rotating steering wheel, gear selector,
+  handbrake, animated pedals, bucket seats with red harnesses running back to a harness bar, roll cage with
+  A-pillar tubes, a switch panel with flip covers, a **working trip meter** (distance + stage clock) on the
+  co-driver's side, fire extinguisher, spare wheel, pine-tree air freshener and a **sheep bobblehead** on
+  springs, hood (with its stripes) visible through the windscreen.
 - **Real mirrors**: one wide backwards render feeds the rear-view and both side mirrors.
 - Driver and passenger **IK arms** with polygonal gloved hands: on the wheel (rotating with it), on the
   handbrake, wiping the glass, reaching for door handles, holding the tablet by its edges, pointing. Each
-  occupant has a helmeted head/torso visible to the *other* player; the navigator wears a head lamp.
+  occupant's head and torso is visible to the *other* player (see the crew below); the navigator wears a
+  head lamp.
 - **Free mouse look for both occupants.** The navigator captures the mouse like the driver: the mouse turns
   their head (independently of the driver's view and never touching the steering), a centre crosshair grabs
   objects, and whatever they hold stays in front of them while they look around.
 - **Spring-damper cabin motion** (no random shake): leaning in corners, pushed back on acceleration, nodding
   on braking, bouncing over bumps, sharp directional jolts on impacts and heavy landings.
+
+### Crew, car and livery
+- **Characters** in the style of faceted low-poly cartoon heads: big **googly eyes** that blink, dart about,
+  stare at the tablet and pop wide open on big hits or going over the edge; worried brows, a nervous half
+  grin, an **open-face rally helmet** with a centre stripe, peak, intercom ear cups and a **mic boom**.
+  Race suits with side panels, chest band, patches, zip, belt, shoulder pads, gloves and racing boots;
+  seated crew wear harnesses and a HANS collar.
+- **Your look** (PIT GARAGE, from the menu and the lobby): 8 helmets, 8 race suits, 5 skin tones, 5 faces
+  (plain, moustache, shades, beard, monobrow) and 8 car liveries, with a SURPRISE ME button. The camera moves
+  in close and your character does a little twirl after each change. Saved in the browser, synced to the
+  room (validated by the server) and used on the stage: your co-driver sees exactly what you picked.
+- **The car wears the driver's livery**: body colour, a wide stripe and a pinstripe along the flanks, twin
+  stripes over the bonnet and roof, door number plates ("LEFT! LEFT! LEFT!", big 3), a windscreen sun strip,
+  rims and wing end plates in the accent colour. Rally kit outside: a **light pod** with four big lamps
+  (glowing at night), flared wheel arches, multi-spoke rims, a **rear wing**, sump guard, side skirts, red tow
+  straps at the tow hooks, big mud flaps, bonnet vents, roof scoop and exhaust.
+
+### Animals on the road
+- Every stage has **flocks of sheep** grazing by the road (a couple always on it), **cows** standing on the
+  road just after a corner (so they appear late) and, on longer countryside stages, a **tractor** with a
+  farmer and a flashing beacon. Placed per seed with their own random stream (the road itself is unchanged).
+- Sheep scatter when the car comes at speed - sometimes straight across the road in a panic - then calm down
+  and graze again. Cows don't care, unless you **honk**: then they amble off the road. The tractor sets off
+  when you come up behind it, trundles along its side of the road at 20 km/h and pulls over later.
+- They are real physics bodies (a cow is a proper obstacle): the car reports an animal impact, hit animals
+  **tumble** in a cloud of fleece, get back on their feet and run off. Baas, moos and the tractor's putt are
+  synthesised and panned.
+- **On the tablet**: sheep, cow and tractor icons at their live positions, with a pulsing red ring when they
+  are on the road. The navigator has a key for it (`-`: COW! / SHEEP! / TRACTOR!, whatever is ahead) and the
+  AI co-driver warns you in solo practice.
+- The driver's client simulates them and streams their poses with the hay bales; the navigator interpolates.
 
 ### Navigation tablet
 - A rugged 3D tablet with orange bumpers; the screen is a live canvas texture (20 fps): heading-up map,
@@ -369,7 +405,8 @@ No key is shared between the two players:
   decisions, tablet ownership, cabin-bounds clamping, callout validation.
 - Compact binary snapshots (`Float32Array`): car (+ driver on foot) at 30 Hz, cabin (tablet, 4 loose objects,
   held object, head look, head lamp / pointing flags, navigator on foot + pull force) at 20 Hz,
-  hay bales at 10 Hz only while moving. Wiper sweeps, seat changes (get out / in) and the finish are
+  hay bales (while moving) and the animals near the car at 10 Hz (reliable, so they are never dropped behind
+  the car state). Wiper sweeps, seat changes (get out / in) and the finish are
   authority events. The server sanitises on-foot positions, rejects tow-hook grips from too far away and
   clamps pull forces. Remote state goes through a jitter buffer with clock-offset estimation, Hermite
   position interpolation and quaternion slerp.
@@ -392,7 +429,12 @@ splashes, bush rustle, UI clicks, countdown beeps, checkpoint chime, finish fanf
 environment, collisions, voice, interface.
 
 ### UI
-Main menu (with DAY / NIGHT), create/join, lobby, loading screen, HUD (minimal for the driver: speed, gear,
+Main menu and lobby float over a live 3D service park (the rally car under a start banner, in the chosen
+stage's look: countryside or mountain, day or night). In the menu you stand next to the car; in the lobby both
+crew members stand there in their own helmets and suits with name tags (a ghost marks an empty seat, a ring
+marks you, ready players wave) and the car wears the driver's livery. CHANGE YOUR LOOK opens the pit garage
+over the same scene. Phones get a stacked layout with a clear window onto the crew. Also: DAY / NIGHT,
+create/join, loading screen, HUD (minimal for the driver: speed, gear,
 time, checkpoint count, warnings; navigator: grip meter, tablet visibility / darkness, hover hints; on foot:
 tow-hook and door prompts, pull strength), hold-`Tab` controls overlay, finish cinematic, subtitles,
 toasts, pause menu with full controls reference, settings (volumes, sensitivity, FOV, cabin motion
@@ -411,18 +453,21 @@ server/                 Node.js game server
   validation/           Input sanitisation, rate limiter
 src/
   shared/               Code shared by server and client (pure TypeScript)
-    stage/              Stage generator, terrain base, pace-note analysis
+    stage/              Stage generator, terrain base, pace-note analysis, animal placement
+    style.ts            Helmets, suits, skins, faces, liveries (shared with the server for validation)
     race/               Road locator, race tracker
     authority/          GameAuthority: server-authoritative rules
     protocol.ts         Typed Socket.IO events
     snapshot.ts         Binary snapshot layouts
   core/                 App flow, input, key bindings (single source of truth), settings, event bus
-  rendering/            Renderer (split screen), sky/lighting, materials, particles, geometry helpers
+  rendering/            Renderer (split screen), sky/lighting, materials, particles, geometry helpers,
+                        crew (heads with googly eyes, helmets, race suits)
   physics/              Rapier world wrapper, car-local cabin physics
   vehicle/              Raycast vehicle controller, drivetrain, car spec, exterior model
   cockpit/              Interior, gauges, occupants/IK arms, cabin motion, doors, windshield/mud/wipers,
                         navigator's head lamp
-  world/                Terrain field, chunked terrain, road, vegetation, props (gates, hay bales)
+  world/                Terrain field, chunked terrain, road, vegetation, props (gates, hay bales),
+                        animals (sheep, cows, tractor: AI, physics, sync, models)
   navigation/           Minimap (tablet screen), callouts + AI co-driver
   tablet/               Tablet model, loose object definitions
   interactions/         Driver and navigator controls
@@ -430,7 +475,7 @@ src/
   audio/                Audio engine and car sounds
   game/                 Game orchestration, seat camera rigs, car render state, on-foot players,
                         finish cinematic
-  ui/                   DOM UI and styles, controls overlay rows
+  ui/                   DOM UI and styles, controls overlay rows, LobbyScene (3D menu/lobby backdrop)
 scripts/                Headless test harnesses (see below)
 public/assets/          Favicon
 ```
@@ -439,18 +484,20 @@ public/assets/          Favicon
 
 ```bash
 npm run typecheck                    # strict TypeScript for client and server
-npm test                                # sim-test (both maps) + cabin + recovery + fall tests below
+npm test                                # sim-test (both maps) + cabin + recovery + fall + animal tests below
 npx tsx scripts/sim-test.ts 42          # headless: autopilot drives a whole countryside stage
 npx tsx scripts/sim-test.ts 42 mountain # ... and a whole mountain stage
 npx tsx scripts/cabin-test.ts           # headless: tablet/objects under g-forces, one-handed grip
 npx tsx scripts/recovery-test.ts        # headless: car in a ditch, one vs two players pulling on the tow hook
 npx tsx scripts/fall-test.ts 42         # headless: off the edge of the mountain: falls, tumbles, lands, no shortcut
+npx tsx scripts/animal-test.ts 42       # headless: sheep graze + scatter, cow hit / knocked over / gets up, honk, tractor, sync
 npx tsx scripts/steer-test.ts           # headless: steering response (yaw rate) at 30 / 60 / 100 / 140 km/h
 npm run test:net                     # end-to-end multiplayer protocol test (needs a running server)
 ```
 
 `net-test` connects two Socket.IO clients and checks room creation/joining, sanitisation, full rooms, role
-and host rules, load/countdown sync, car-state relay, role enforcement, teleport rejection + correction,
+and host rules, personal looks (shared, invalid ones ignored), load/countdown sync, car-state relay, animal
+pose relay, the COW! callout, role enforcement, teleport rejection + correction,
 callout authorisation, resets, manual wiper cycles (one per press, driver only, relayed to both), getting
 out only when stopped, server-owned seat flags, tow-hook grip / pull-force validation, getting back in only
 at your own door, impact-driven door pops, disconnect pause, seat-token reconnection and token hijack

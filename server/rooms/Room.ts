@@ -5,6 +5,7 @@ import { COUNTDOWN_MS, LOAD_TIMEOUT_MS, type StageLength } from '../../src/share
 import type { ClientToServerEvents, ImpactReport, MudReport, ServerToClientEvents } from '../../src/shared/protocol';
 import { toArrayBuffer } from '../../src/shared/snapshot';
 import { generateStage } from '../../src/shared/stage/StageGenerator';
+import { DEFAULT_STYLE, sameStyle, type PlayerStyle } from '../../src/shared/style';
 import type { CalloutId, DoorSide, PlayerInfo, Role, RoomPhase, RoomSnapshot, StageData, StageMap, StageParams } from '../../src/shared/types';
 import type { GameServer } from './RoomManager';
 
@@ -19,6 +20,7 @@ export interface PlayerSlot {
   socket: GameSocket | null;
   loaded: boolean;
   isHost: boolean;
+  style: PlayerStyle;
   voice: boolean;
   graceTimer: NodeJS.Timeout | null;
 }
@@ -66,6 +68,7 @@ export class Room {
       socket: null,
       loaded: false,
       isHost: this.players.length === 0,
+      style: { ...DEFAULT_STYLE },
       voice: false,
       graceTimer: null,
     };
@@ -153,6 +156,13 @@ export class Room {
     if (role && this.players.some((p) => p !== slot && p.role === role)) return;
     slot.role = role;
     slot.ready = false;
+    this.broadcastState();
+  }
+
+  /** New look (lobby only: the car and crew are built when the stage loads). */
+  setStyle(slot: PlayerSlot, style: PlayerStyle) {
+    if (this.phase !== 'lobby' || sameStyle(slot.style, style)) return;
+    slot.style = style;
     this.broadcastState();
   }
 
@@ -312,7 +322,8 @@ export class Room {
 
   propsState(slot: PlayerSlot, buf: Float32Array) {
     if (this.roleOf(slot) !== 'driver') return;
-    slot.socket?.to(this.code).volatile.emit('props:state', toArrayBuffer(buf));
+    // reliable (10 Hz): volatile relays get dropped while the 30 Hz car state is being written
+    slot.socket?.to(this.code).emit('props:state', toArrayBuffer(buf));
   }
 
   impact(slot: PlayerSlot, r: ImpactReport) {
@@ -428,6 +439,7 @@ export class Room {
       connected: !!p.socket,
       loaded: p.loaded,
       isHost: p.isHost,
+      style: { ...p.style },
     }));
     return {
       code: this.code,

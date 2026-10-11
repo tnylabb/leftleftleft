@@ -5,6 +5,7 @@ import { io, type Socket } from 'socket.io-client';
 import type { StageLength } from '../shared/constants';
 import type { ClientToServerEvents, ImpactReport, JoinAck, MudReport, ServerToClientEvents } from '../shared/protocol';
 import { readFloat32, toArrayBuffer } from '../shared/snapshot';
+import type { PlayerStyle } from '../shared/style';
 import type { CalloutId, DoorSide, Role, RoomSnapshot, StageMap, StageParams } from '../shared/types';
 import { GameSession, type ConnectionStatus } from './Session';
 
@@ -28,6 +29,8 @@ export class OnlineSession extends GameSession {
   private syncTimer: number | null = null;
   rtt = 0;
   private name = 'Player';
+  /** Our look, sent to the room after every create / join / rejoin. */
+  style: PlayerStyle | null = null;
 
   constructor(url?: string) {
     super();
@@ -214,6 +217,8 @@ export class OnlineSession extends GameSession {
         if (err || !res) resolve({ ok: false, error: 'Server did not answer' });
         else {
           this.saveSeat(res);
+          // tell the room what we look like
+          if (res.ok && this.style) this.socket.emit('lobby:style', { style: this.style });
           resolve(res);
         }
       };
@@ -249,6 +254,10 @@ export class OnlineSession extends GameSession {
   setReady(ready: boolean) {
     this.socket.emit('lobby:ready', { ready });
   }
+  setStyle(style: PlayerStyle) {
+    this.style = style;
+    if (this.socket.connected) this.socket.emit('lobby:style', { style });
+  }
   setStage(length: StageLength, seed?: number, night?: boolean, map?: StageMap) {
     this.socket.emit('lobby:stage', { length, seed, night, map });
   }
@@ -261,7 +270,8 @@ export class OnlineSession extends GameSession {
     if (this.socket.connected) this.socket.volatile.emit('cabin:state', toArrayBuffer(buf.slice()));
   }
   sendProps(buf: Float32Array) {
-    if (this.socket.connected) this.socket.volatile.emit('props:state', toArrayBuffer(buf));
+    // not volatile: a volatile packet is dropped whenever the socket is still busy with the car state
+    if (this.socket.connected) this.socket.emit('props:state', toArrayBuffer(buf));
   }
   reportImpact(r: ImpactReport) {
     this.socket.emit('event:impact', r);

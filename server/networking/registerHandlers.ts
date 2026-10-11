@@ -2,6 +2,7 @@ import { CABIN, CAR, MAX_PROPS_PER_MSG, PROP_STRIDE, readFloat32 } from '../../s
 import type { CalloutId } from '../../src/shared/types';
 import type { Room, GameSocket, PlayerSlot } from '../rooms/Room';
 import type { GameServer, RoomManager } from '../rooms/RoomManager';
+import { sanitizeStyle } from '../../src/shared/style';
 import {
   RateLimiter,
   finite,
@@ -88,6 +89,13 @@ export function registerHandlers(io: GameServer, rooms: RoomManager) {
       if (!c || !isObject(payload)) return;
       if (payload.role !== null && !isRole(payload.role)) return;
       c.room.setRole(c.slot, payload.role);
+    });
+
+    socket.on('lobby:style', (payload) => {
+      const c = ctx();
+      if (!c || !isObject(payload) || !limiter.allow('style', 8, 8)) return;
+      const style = sanitizeStyle(payload.style);
+      if (style) c.room.setStyle(c.slot, style);
     });
 
     socket.on('lobby:ready', (payload) => {

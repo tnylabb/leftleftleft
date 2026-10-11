@@ -65,6 +65,14 @@ check(room.stage.length === 'medium', 'only the host can change the stage');
 driver.emit('lobby:stage', { length: 'short', seed: 4242 });
 await sleep(150);
 check(room.stage.length === 'short' && room.stage.seed === 4242, 'host sets stage length + seed');
+// personal style: valid looks are shared, nonsense is ignored
+nav.emit('lobby:style', { style: { helmet: 7, suit: 2, skin: 4, face: 3, livery: 5 } });
+await sleep(150);
+const navStyle = () => room.players.find((p) => p.id === joined.playerId)?.style;
+check(navStyle()?.helmet === 7 && navStyle()?.livery === 5, 'a player\'s look is shared with the room');
+nav.emit('lobby:style', { style: { helmet: 99, suit: 2, skin: 4, face: 3, livery: 5 } } as never);
+await sleep(150);
+check(navStyle()?.helmet === 7, 'an invalid look is ignored');
 
 const loadD = once(driver, 'game:load');
 const loadN = once(nav, 'game:load');
@@ -112,6 +120,19 @@ await sleep(150);
 check(relayed === 1, 'navigator cannot send car states (role validation)');
 await once(driver, 'game:go', 6000);
 check(true, 'game:go received');
+
+// props (hay bales + animals) stream from the driver to the navigator
+let propsSeen: Float32Array | null = null;
+nav.on('props:state', (b) => (propsSeen = readFloat32(b)));
+const herd = new Float32Array([1, 1000, start.x + 3, start.y, start.z - 20, 0, 0, 0, 1]);
+driver.emit('props:state', toArrayBuffer(herd));
+await sleep(250);
+const seen = propsSeen as Float32Array | null;
+check(!!seen && seen[1] === 1000 && Math.abs(seen[4] - (start.z - 20)) < 0.01, 'animal poses relayed to the navigator');
+const animalCall = once(driver, 'callout');
+nav.emit('callout', { id: 'cow' });
+check((await animalCall).id === 'cow', 'the navigator can shout COW!');
+await sleep(1300); // callouts are spaced out
 
 const teleportJump = new Float32Array(buf);
 teleportJump[CAR.px] = start.x + 500;

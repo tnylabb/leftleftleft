@@ -126,6 +126,58 @@ export class AudioEngine {
     o.stop(t + opts.duration + 0.05);
   }
 
+  /**
+   * Farm animals: a bleating sheep (vibrato sawtooth through a moving formant),
+   * a long cow moo, the higher yelp when one gets bumped, a tractor's putt.
+   */
+  animalCall(voice: 'baa' | 'moo' | 'baaHit' | 'mooHit' | 'putt', gain: number, pan: number) {
+    if (!this.ready || gain < 0.02) return;
+    if (voice === 'putt') {
+      this.burst({ bus: 'environment', duration: 0.08, gain: 0.2 * gain, freq: 95, q: 0.7, type: 'lowpass', pan });
+      return;
+    }
+    const ctx = this.ctx!;
+    const t = ctx.currentTime;
+    const sheep = voice === 'baa' || voice === 'baaHit';
+    const hit = voice === 'baaHit' || voice === 'mooHit';
+    const dur = sheep ? (hit ? 0.5 : 0.7 + Math.random() * 0.2) : hit ? 0.8 : 1.3 + Math.random() * 0.4;
+    const f0 = sheep ? (hit ? 540 : 300 + Math.random() * 80) : hit ? 190 : 100 + Math.random() * 25;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(f0, t);
+    const stop = t + dur + 0.05;
+    if (sheep) {
+      const lfo = ctx.createOscillator();
+      const depth = ctx.createGain();
+      lfo.frequency.value = 7 + Math.random() * 3;
+      depth.gain.value = f0 * 0.07;
+      lfo.connect(depth).connect(o.frequency);
+      lfo.start(t);
+      lfo.stop(stop);
+      o.frequency.linearRampToValueAtTime(f0 * 0.86, t + dur);
+    } else {
+      o.frequency.setValueAtTime(f0 * 0.92, t);
+      o.frequency.linearRampToValueAtTime(f0 * 1.1, t + dur * 0.3);
+      o.frequency.linearRampToValueAtTime(f0 * 0.78, t + dur);
+    }
+    // "mmm" opening into "aaa" / "ooo"
+    const f = ctx.createBiquadFilter();
+    f.type = 'bandpass';
+    f.Q.value = sheep ? 2.4 : 1.3;
+    f.frequency.setValueAtTime(sheep ? 850 : 240, t);
+    f.frequency.linearRampToValueAtTime(sheep ? 1500 : 640, t + dur * 0.35);
+    f.frequency.linearRampToValueAtTime(sheep ? 1050 : 360, t + dur);
+    const g = ctx.createGain();
+    const peak = (sheep ? 0.5 : 0.7) * gain * (hit ? 1.3 : 1);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + (sheep ? 0.05 : 0.18));
+    g.gain.setValueAtTime(Math.max(0.0002, peak), t + dur * 0.7);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(f).connect(g).connect(this.out('environment', pan));
+    o.start(t);
+    o.stop(stop);
+  }
+
   // --- UI sounds ----------------------------------------------------------------
   uiClick() {
     this.tone({ bus: 'ui', freq: 900, endFreq: 600, duration: 0.06, gain: 0.25, type: 'triangle' });

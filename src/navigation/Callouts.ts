@@ -22,10 +22,14 @@ export const CALLOUT_TEXT: Record<CalloutId, string> = {
   dropped: 'I DROPPED THE TABLET!',
   nice: 'NICE ONE!',
   ouch: 'OUCH!',
+  sheep: 'SHEEP! SHEEP ON THE ROAD!',
+  cow: 'COW! COW! COW!',
+  tractor: 'TRACTOR AHEAD!',
   note: '',
 };
 
-export const NAV_HOTKEYS: { code: string; key: string; id: CalloutId | 'other' }[] = [
+/** `other` = "no, the other left/right"; `animal` = whatever is on the road ahead. */
+export const NAV_HOTKEYS: { code: string; key: string; id: CalloutId | 'other' | 'animal' }[] = [
   { code: 'Digit1', key: '1', id: 'left' },
   { code: 'Digit2', key: '2', id: 'left3' },
   { code: 'Digit3', key: '3', id: 'right' },
@@ -36,6 +40,7 @@ export const NAV_HOTKEYS: { code: string; key: string; id: CalloutId | 'other' }
   { code: 'Digit8', key: '8', id: 'missed' },
   { code: 'Digit9', key: '9', id: 'accelerating' },
   { code: 'Digit0', key: '0', id: 'jump' },
+  { code: 'Minus', key: '-', id: 'animal' },
 ];
 
 export function calloutText(msg: CalloutMsg): string {

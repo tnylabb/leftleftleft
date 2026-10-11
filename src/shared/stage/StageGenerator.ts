@@ -5,6 +5,7 @@ import { ROAD_HALF_WIDTH, ROAD_SAMPLE_SPACING, STAGE_LENGTHS } from '../constant
 import { clamp, wrapAngle } from '../math';
 import { Noise2D, Rng, hash2 } from '../rng';
 import type { Checkpoint, HayBale, Jump, Puddle, StageData, StageParams } from '../types';
+import { placeAnimals } from './animals';
 import { analyseCorners } from './pacenotes';
 import { createTerrainBase, type HeightFn } from './terrainBase';
 
@@ -498,6 +499,9 @@ export function generateStage(params: StageParams): StageData {
     exposure.set(ex);
   }
 
+  // --- livestock and farm traffic (own random stream) -------------------------------
+  const animals = placeAnimals(params, { xs, zs, headings, curvature, count, startIdx, finishIdx, corners, jumps, checkpoints });
+
   // --- bounds & hash -------------------------------------------------------------
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
   for (let i = 0; i < count; i++) {
@@ -531,6 +535,7 @@ export function generateStage(params: StageParams): StageData {
     jumps,
     puddles,
     bales,
+    animals,
     checkpoints,
     halfWidths,
     exposure,

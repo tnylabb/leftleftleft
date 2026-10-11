@@ -1,6 +1,7 @@
 // Socket.IO event contracts shared by client and server.
 
 import type { StageLength } from './constants';
+import type { PlayerStyle } from './style';
 import type {
   CalloutId,
   CalloutMsg,
@@ -76,6 +77,7 @@ export interface ClientToServerEvents {
   'room:leave': () => void;
   'lobby:role': (payload: { role: Role | null }) => void;
   'lobby:ready': (payload: { ready: boolean }) => void;
+  'lobby:style': (payload: { style: PlayerStyle }) => void;
   'lobby:stage': (payload: { length: StageLength; seed?: number; night?: boolean; map?: StageMap }) => void;
   'game:loaded': (payload: { hash: number }) => void;
   'game:restart': (payload: { mode: 'retry' | 'new' }) => void;

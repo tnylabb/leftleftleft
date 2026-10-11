@@ -2,9 +2,11 @@
 // camera) and two-bone IK arms with chunky polygonal hands (always visible).
 
 import * as THREE from 'three';
+import { CrewHead, seatedTorso, suitOf } from '../rendering/crew';
 import { GeoBuilder, mat, placeBetween, setLayer } from '../rendering/geometry';
 import { LAYER } from '../rendering/layers';
-import { lambert, PALETTE, vertexColored } from '../rendering/materials';
+import { lambert, vertexColored } from '../rendering/materials';
+import { SKINS, type PlayerStyle } from '../shared/style';
 import { LAYOUT } from './layout';
 
 const _dir = new THREE.Vector3();
@@ -117,6 +119,8 @@ export class Occupant {
   readonly group = new THREE.Group();
   readonly body = new THREE.Group();
   readonly head = new THREE.Group();
+  /** Face, helmet and googly eyes. */
+  readonly face: CrewHead;
   readonly left: Arm;
   readonly right: Arm;
   readonly shoulderL = new THREE.Vector3();
@@ -125,38 +129,30 @@ export class Occupant {
   private baseShoulderR: THREE.Vector3;
   private eye: THREE.Vector3;
 
-  constructor(readonly kind: 'driver' | 'navigator') {
+  constructor(readonly kind: 'driver' | 'navigator', style: PlayerStyle) {
     const driver = kind === 'driver';
-    const suit = driver ? PALETTE.driverSuit : PALETTE.navSuit;
-    const glove = driver ? PALETTE.glove : PALETTE.skin;
-    const cuff = driver ? PALETTE.tabletBumper : suit;
-    const helmet = driver ? PALETTE.helmetDriver : PALETTE.helmetNav;
+    const s = suitOf(style);
+    const suit = s.base;
+    // drivers wear gloves; co-drivers keep bare hands for the tablet
+    const glove = driver ? s.trim : SKINS[style.skin];
+    const cuff = s.accent;
     this.eye = driver ? LAYOUT.driverEye.clone() : LAYOUT.navEye.clone();
     this.baseShoulderL = (driver ? LAYOUT.driverShoulderL : LAYOUT.navShoulderL).clone();
     this.baseShoulderR = (driver ? LAYOUT.driverShoulderR : LAYOUT.navShoulderR).clone();
     const x = this.eye.x;
 
     // torso
-    const tb = new GeoBuilder()
-      .add(new THREE.BoxGeometry(0.42, 0.5, 0.22), suit, mat(0, 0.0, 0), { shade: 0.08 })
-      .add(new THREE.BoxGeometry(0.44, 0.1, 0.24), suit, mat(0, 0.22, 0.0), { shade: 0.08 })
-      .add(new THREE.BoxGeometry(0.06, 0.48, 0.01), 0x111111, mat(-0.12, 0.0, -0.112))
-      .add(new THREE.BoxGeometry(0.06, 0.48, 0.01), 0x111111, mat(0.12, 0.0, -0.112))
-      .add(new THREE.BoxGeometry(0.4, 0.2, 0.36), suit, mat(0, -0.3, -0.12), { shade: 0.08 }) // thighs start
-      .add(new THREE.BoxGeometry(0.4, 0.14, 0.4), suit, mat(0, -0.2, -0.38), { shade: 0.08 });
-    const torso = new THREE.Mesh(tb.build(), vertexColored());
+    const torso = new THREE.Mesh(seatedTorso(style), vertexColored());
     torso.position.set(x, 0.18, 0.4);
     torso.rotation.x = 0.16;
     this.body.add(torso);
 
     // head with helmet + visor, pivoting at the neck
     this.head.position.set(x, this.eye.y - 0.06, this.eye.z + 0.1);
-    const hb = new GeoBuilder()
-      .add(new THREE.IcosahedronGeometry(0.15, 1), helmet, mat(0, 0.06, 0, 0, 0, 0, 1, 1.05, 1.12), { shade: 0.08 })
-      .add(new THREE.BoxGeometry(0.2, 0.07, 0.04), 0x1b2a33, mat(0, 0.06, -0.15))
-      .add(new THREE.BoxGeometry(0.31, 0.03, 0.2), driver ? 0x2b4f91 : 0x1b1b1b, mat(0, 0.15, 0.02, 0, 0, 0))
-      .add(new THREE.CylinderGeometry(0.05, 0.06, 0.12, 6), suit, mat(0, -0.1, 0.02));
-    this.head.add(new THREE.Mesh(hb.build(), vertexColored()));
+    this.face = new CrewHead(style);
+    this.face.group.position.y = 0.06;
+    this.face.group.scale.setScalar(1.15);
+    this.head.add(this.face.group);
     this.body.add(this.head);
     setLayer(this.body, driver ? LAYER.DRIVER_BODY : LAYER.NAV_BODY);
     this.group.add(this.body);

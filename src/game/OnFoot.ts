@@ -5,9 +5,11 @@
 
 import * as THREE from 'three';
 import { Arm } from '../cockpit/Occupant';
-import { GeoBuilder, mat, setLayer } from '../rendering/geometry';
+import { CrewHead, standingLeg, standingTorso, suitOf } from '../rendering/crew';
+import { setLayer } from '../rendering/geometry';
 import { LAYER } from '../rendering/layers';
-import { PALETTE, vertexColored } from '../rendering/materials';
+import { vertexColored } from '../rendering/materials';
+import { SKINS, type PlayerStyle } from '../shared/style';
 import { CAR_HOOKS, GRIP_REACH, PULL_FORCE_MAX } from '../shared/constants';
 import { clamp } from '../shared/math';
 import type { Role } from '../shared/types';
@@ -166,41 +168,32 @@ export class FootAvatar {
   private legL: THREE.Mesh;
   private legR: THREE.Mesh;
   private head = new THREE.Group();
+  /** Face, helmet and googly eyes. */
+  readonly face: CrewHead;
   readonly left: Arm;
   readonly right: Arm;
 
-  constructor(role: Role) {
+  /** `role` only picks the render layer (null in the lobby, where everyone sees everyone). */
+  constructor(style: PlayerStyle, role: Role | null) {
     const driver = role === 'driver';
-    const suit = driver ? PALETTE.driverSuit : PALETTE.navSuit;
-    const glove = driver ? PALETTE.glove : PALETTE.skin;
-    const helmet = driver ? PALETTE.helmetDriver : PALETTE.helmetNav;
-    const torso = new GeoBuilder()
-      .add(new THREE.BoxGeometry(0.44, 0.58, 0.24), suit, mat(0, 1.22, 0), { shade: 0.08 })
-      .add(new THREE.BoxGeometry(0.46, 0.1, 0.26), suit, mat(0, 1.47, 0), { shade: 0.08 })
-      .add(new THREE.BoxGeometry(0.4, 0.14, 0.24), 0x1b1b1b, mat(0, 0.92, 0))
-      .add(new THREE.CylinderGeometry(0.05, 0.06, 0.12, 6), suit, mat(0, 1.55, 0))
-      .build();
-    this.body.add(new THREE.Mesh(torso, vertexColored()));
-    const legGeo = new GeoBuilder()
-      .add(new THREE.BoxGeometry(0.16, 0.86, 0.18), suit, mat(0, -0.43, 0), { shade: 0.08 })
-      .add(new THREE.BoxGeometry(0.17, 0.1, 0.28), 0x1b1b1b, mat(0, -0.86, -0.05))
-      .build();
-    this.legL = new THREE.Mesh(legGeo, vertexColored());
-    this.legR = new THREE.Mesh(legGeo, vertexColored());
+    const s = suitOf(style);
+    const glove = role === 'navigator' ? SKINS[style.skin] : s.trim;
+    this.body.add(new THREE.Mesh(standingTorso(style), vertexColored()));
+    this.legL = new THREE.Mesh(standingLeg(style, -1), vertexColored());
+    this.legR = new THREE.Mesh(standingLeg(style, 1), vertexColored());
     this.legL.position.set(-0.11, 0.88, 0);
     this.legR.position.set(0.11, 0.88, 0);
     this.body.add(this.legL, this.legR);
-    const hb = new GeoBuilder()
-      .add(new THREE.IcosahedronGeometry(0.15, 1), helmet, mat(0, 0, 0, 0, 0, 0, 1, 1.05, 1.12), { shade: 0.08 })
-      .add(new THREE.BoxGeometry(0.2, 0.07, 0.04), 0x1b2a33, mat(0, 0, -0.15));
-    this.head.add(new THREE.Mesh(hb.build(), vertexColored()));
-    this.head.position.set(0, 1.66, 0);
+    this.face = new CrewHead(style);
+    this.head.add(this.face.group);
+    this.face.group.scale.setScalar(1.3); // cartoon proportions: big head, big eyes
+    this.head.position.set(0, 1.74, 0);
     this.body.add(this.head);
     setLayer(this.body, driver ? LAYER.DRIVER_BODY : LAYER.NAV_BODY);
     this.root.add(this.body);
     const arms = new THREE.Group();
-    this.left = new Arm(arms, suit, glove, suit, false);
-    this.right = new Arm(arms, suit, glove, suit, true);
+    this.left = new Arm(arms, s.base, glove, s.accent, false);
+    this.right = new Arm(arms, s.base, glove, s.accent, true);
     // arms are visible to everyone, including the player's own first-person view
     this.root.add(arms);
     this.root.traverse((o) => {
@@ -236,6 +229,29 @@ export class FootAvatar {
       tR = sR.clone().add(new THREE.Vector3(0, -0.58, 0)).addScaledVector(fwd, Math.sin(walk) * 0.18);
     }
     const up = new THREE.Vector3(0, 1, 0);
+    this.left.solve(sL, tL, sL.clone().addScaledVector(side, -0.4).add(new THREE.Vector3(0, -0.3, 0)), up);
+    this.right.solve(sR, tR, sR.clone().addScaledVector(side, 0.4).add(new THREE.Vector3(0, -0.3, 0)), up);
+  }
+
+  /**
+   * Free pose (lobby): standing at `pos` facing `yaw`, head turned / tilted,
+   * hands at world targets (null = hanging at the side), a small breathing bob.
+   */
+  poseFree(pos: THREE.Vector3, yaw: number, headYaw: number, headPitch: number, handL: THREE.Vector3 | null, handR: THREE.Vector3 | null, bob = 0) {
+    this.root.visible = true;
+    this.body.position.copy(pos).add(new THREE.Vector3(0, bob, 0));
+    this.body.rotation.set(0, yaw, 0);
+    this.legL.rotation.x = 0;
+    this.legR.rotation.x = 0;
+    this.head.rotation.set(clamp(headPitch, -0.8, 0.6), clamp(headYaw, -1.1, 1.1), 0);
+    const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    const base = pos.clone().add(new THREE.Vector3(0, bob, 0));
+    const sL = new THREE.Vector3(-0.27, 1.45, 0).applyQuaternion(q).add(base);
+    const sR = new THREE.Vector3(0.27, 1.45, 0).applyQuaternion(q).add(base);
+    const side = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    const up = new THREE.Vector3(0, 1, 0);
+    const tL = handL ?? sL.clone().add(new THREE.Vector3(0, -0.6, 0)).addScaledVector(side, -0.05);
+    const tR = handR ?? sR.clone().add(new THREE.Vector3(0, -0.6, 0)).addScaledVector(side, 0.05);
     this.left.solve(sL, tL, sL.clone().addScaledVector(side, -0.4).add(new THREE.Vector3(0, -0.3, 0)), up);
     this.right.solve(sR, tR, sR.clone().addScaledVector(side, 0.4).add(new THREE.Vector3(0, -0.3, 0)), up);
   }

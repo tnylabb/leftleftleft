@@ -1,15 +1,20 @@
 // First-person hatchback interior: angular dashboard, gauges, steering wheel,
-// gear stick, handbrake, pedals, seats, pillars, roll cage, mirrors and trinkets.
+// gear stick, handbrake, pedals, bucket seats with harnesses, pillars, roll
+// cage, switch panel, trip meter, mirrors and trinkets. Painted metal takes
+// the livery's body colour, like a real stripped-out rally car.
 
 import * as THREE from 'three';
 import { GeoBuilder, mat, setLayer } from '../rendering/geometry';
 import { LAYER } from '../rendering/layers';
-import { lambert, PALETTE, vertexColored } from '../rendering/materials';
+import { canvasTexture, lambert, PALETTE, vertexColored } from '../rendering/materials';
 import { clamp } from '../shared/math';
+import { LIVERIES, type LiveryLook } from '../shared/style';
 import { Gauges, type GaugeState } from './Gauges';
 import { LAYOUT } from './layout';
 
 const V = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+const shade = (c: number, k: number) => new THREE.Color(c).multiplyScalar(k).getHex();
+const HARNESS = 0xc23b2c;
 
 const GEAR_POS: Record<number, [number, number]> = {
   1: [-1, -1], 2: [-1, 1], 3: [0, -1], 4: [0, 1], 5: [1, -1], [-1]: [1, 1], 0: [0, 0],
@@ -27,6 +32,8 @@ export interface CockpitState {
   accelLocal: THREE.Vector3;
   doorOpen: boolean;
   wipers: boolean;
+  /** Stage clock for the trip meter. */
+  timeMs?: number;
 }
 
 export class Cockpit {
@@ -46,13 +53,30 @@ export class Cockpit {
   private gearVis = new THREE.Vector2();
   private hbVis = 0;
   wheelVisualAngle = 0;
+  /** Painted metal (livery body colour) and its darker shade. */
+  private paint: number;
+  private paintDark: number;
+  private livery: LiveryLook;
+  private trip: { canvas: HTMLCanvasElement; g: CanvasRenderingContext2D; texture: THREE.CanvasTexture; timer: number; text: string };
+  private bobble = new THREE.Group();
+  private bobAngle = new THREE.Vector2();
+  private bobVel = new THREE.Vector2();
+  private distance = 0;
 
-  constructor() {
+  constructor(livery: LiveryLook = LIVERIES[0]) {
     this.group.name = 'cockpit';
+    this.livery = livery;
+    this.paint = shade(livery.body, 0.9);
+    this.paintDark = shade(livery.body, 0.62);
+    const canvas = document.createElement('canvas');
+    canvas.width = 128;
+    canvas.height = 64;
+    this.trip = { canvas, g: canvas.getContext('2d')!, texture: canvasTexture(canvas), timer: 0, text: '' };
     this.buildShell();
     this.buildDash();
     this.buildControls();
     this.buildSeats();
+    this.buildRallyKit();
     const mirrors = this.buildMirrors();
     this.mirrorRear = mirrors.rear;
     this.mirrorLeft = mirrors.left;
@@ -69,8 +93,8 @@ export class Cockpit {
 
   private buildShell() {
     const b = new GeoBuilder();
-    const I = PALETTE.interior;
-    const ID = PALETTE.interiorDark;
+    const I = this.paint;
+    const ID = this.paintDark;
     const sh = { shade: 0.08 };
     // floor + transmission tunnel
     b.add(new THREE.BoxGeometry(1.5, 0.04, 2.6), PALETTE.carpet, mat(0, LAYOUT.floorY - 0.02, 0.3), sh);
@@ -119,18 +143,23 @@ export class Cockpit {
     cyl(V(-0.6, 0.8, 0.66), V(-0.58, 0.8, -0.38));
     cyl(V(0.6, 0.8, 0.66), V(0.58, 0.8, -0.38));
     cyl(V(-0.6, 0.8, 0.66), V(0.58, LAYOUT.floorY + 0.05, 1.3));
+    // harness bar behind the seats, A-pillar tubes down to the floor
+    cyl(V(-0.61, 0.42, 0.67), V(0.61, 0.42, 0.67));
+    cyl(V(-0.58, 0.8, -0.38), V(-0.66, LAYOUT.floorY, -0.62));
+    cyl(V(0.58, 0.8, -0.38), V(0.66, LAYOUT.floorY, -0.62));
+    for (const s of [-1, 1]) b.add(new THREE.BoxGeometry(0.06, 0.06, 0.06), 0x8a867e, mat(0.62 * s, LAYOUT.floorY + 0.03, 0.68));
     const mesh = new THREE.Mesh(b.build(), vertexColored());
     this.group.add(mesh);
   }
 
   private buildDash() {
     const b = new GeoBuilder();
-    const I = PALETTE.interior;
+    const I = this.paint;
     const P = PALETTE.plastic;
     const sh = { shade: 0.07 };
     const d = LAYOUT.dash;
-    // top shelf (orange-red, faded) sloping slightly towards the windshield
-    b.add(new THREE.BoxGeometry(1.48, 0.06, d.backZ - d.frontZ), I, mat(0, d.topY - 0.03, (d.backZ + d.frontZ) / 2, 0.06, 0, 0), sh);
+    // top shelf: dark anti-glare flock, sloping slightly towards the windshield
+    b.add(new THREE.BoxGeometry(1.48, 0.06, d.backZ - d.frontZ), 0x2c2b2a, mat(0, d.topY - 0.03, (d.backZ + d.frontZ) / 2, 0.06, 0, 0), sh);
     // angular dash face
     b.add(new THREE.BoxGeometry(1.48, 0.26, 0.08), P, mat(0, 0.2, -0.63, -0.25, 0, 0), sh);
     b.add(new THREE.BoxGeometry(1.48, 0.2, 0.1), P, mat(0, -0.02, -0.72, 0.35, 0, 0), sh);
@@ -242,8 +271,19 @@ export class Cockpit {
       b.add(new THREE.BoxGeometry(0.5, 0.66, 0.12), PALETTE.seat, mat(x, 0.36, 0.6, 0.18, 0, 0), sh);
       b.add(new THREE.BoxGeometry(0.06, 0.5, 0.2), PALETTE.seat, mat(x - 0.24, 0.32, 0.54, 0.18, 0, 0), sh);
       b.add(new THREE.BoxGeometry(0.06, 0.5, 0.2), PALETTE.seat, mat(x + 0.24, 0.32, 0.54, 0.18, 0, 0), sh);
-      b.add(new THREE.BoxGeometry(0.06, 0.6, 0.125), PALETTE.seatStripe, mat(x, 0.36, 0.6, 0.18, 0, 0));
+      b.add(new THREE.BoxGeometry(0.06, 0.6, 0.125), this.livery.stripeA === 0x1d1d1f ? PALETTE.seatStripe : this.livery.stripeA, mat(x, 0.36, 0.6, 0.18, 0, 0));
       b.add(new THREE.BoxGeometry(0.26, 0.16, 0.1), PALETTE.seat, mat(x, 0.78, 0.72, 0.18, 0, 0), sh);
+      b.add(new THREE.BoxGeometry(0.12, 0.05, 0.01), 0xf4f1e8, mat(x, 0.8, 0.665, 0.18, 0, 0));
+      // shoulder straps over the top of the seat back to the harness bar
+      for (const k of [-1, 1]) {
+        const a = V(x + 0.11 * k, 0.5, 0.48);
+        const c = V(x + 0.13 * k, 0.43, 0.67);
+        const o = new THREE.Object3D();
+        o.position.copy(a).add(c).multiplyScalar(0.5);
+        o.quaternion.setFromUnitVectors(V(0, 0, 1), c.clone().sub(a).normalize());
+        o.updateMatrix();
+        b.add(new THREE.BoxGeometry(0.055, 0.01, a.distanceTo(c)), HARNESS, o.matrix);
+      }
       // seat base frame
       b.add(new THREE.BoxGeometry(0.4, 0.14, 0.4), 0x2a2a2a, mat(x, LAYOUT.floorY + 0.07, 0.25));
       this.group.add(new THREE.Mesh(b.build(), vertexColored()));
@@ -289,6 +329,86 @@ export class Cockpit {
     right.rotation.y = -0.25;
     this.group.add(left, right);
     return { rear, left, right };
+  }
+
+  /** Rally kit: switch panel, trip meter, fire extinguisher, spare wheel and a sheep bobblehead. */
+  private buildRallyKit() {
+    const d = LAYOUT.dash;
+    const b = new GeoBuilder();
+    // switch panel ahead of the gear lever: six toggles, two under red flip covers
+    const panel = mat(0, LAYOUT.floorY + 0.215, -0.49, -0.35, 0, 0);
+    const on = (m: THREE.Matrix4) => new THREE.Matrix4().multiplyMatrices(panel, m);
+    b.add(new THREE.BoxGeometry(0.19, 0.02, 0.14), 0x1a1a1c, panel);
+    for (let k = 0; k < 6; k++) {
+      const x = -0.07 + (k % 3) * 0.07;
+      const z = k < 3 ? -0.025 : 0.03;
+      b.add(new THREE.BoxGeometry(0.012, 0.03, 0.012), 0xc8c8c8, on(mat(x, 0.02, z)));
+      if (k === 0 || k === 2) b.add(new THREE.BoxGeometry(0.03, 0.01, 0.045), 0xc8372d, on(mat(x, 0.038, z + 0.008, 0.5, 0, 0)));
+    }
+    b.add(new THREE.BoxGeometry(0.04, 0.012, 0.03), 0xe8742b, on(mat(0.075, 0.016, 0.03)));
+    // trip meter on the co-driver's side of the dash
+    b.add(new THREE.BoxGeometry(0.17, 0.07, 0.06), 0x1d1d1f, mat(0.36, d.topY + 0.05, -0.66, -0.35, 0, 0));
+    for (const x of [0.3, 0.42]) b.add(new THREE.BoxGeometry(0.02, 0.012, 0.012), 0xc8c8c8, mat(x, d.topY + 0.088, -0.645, -0.35, 0, 0));
+    // fire extinguisher behind the seats, a spare wheel on the back seat
+    b.add(new THREE.CylinderGeometry(0.055, 0.055, 0.34, 8), 0xc8372d, mat(0, LAYOUT.floorY + 0.07, 0.76, 0, 0, Math.PI / 2), { shade: 0.08 });
+    b.add(new THREE.CylinderGeometry(0.03, 0.03, 0.05, 6), 0x1d1d1f, mat(0.19, LAYOUT.floorY + 0.07, 0.76, 0, 0, Math.PI / 2));
+    b.add(new THREE.BoxGeometry(0.03, 0.03, 0.09), 0x1d1d1f, mat(0.23, LAYOUT.floorY + 0.1, 0.76));
+    for (const x of [-0.1, 0.1]) b.add(new THREE.BoxGeometry(0.02, 0.13, 0.12), 0x8a867e, mat(x, LAYOUT.floorY + 0.05, 0.76));
+    b.add(new THREE.CylinderGeometry(0.27, 0.27, 0.19, 12), PALETTE.tyre, mat(0.36, 0.2, 1.08, 0.28, 0, Math.PI / 2), { shade: 0.15 });
+    b.add(new THREE.CylinderGeometry(0.17, 0.17, 0.195, 10), this.livery.accent, mat(0.36, 0.2, 1.08, 0.28, 0, Math.PI / 2));
+    b.add(new THREE.BoxGeometry(0.04, 0.6, 0.012), HARNESS, mat(0.36, 0.2, 1.0, 0.28, 0, 0));
+    this.group.add(new THREE.Mesh(b.build(), vertexColored()));
+    // trip meter display (distance + stage clock, drawn on a tiny canvas)
+    const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.13, 0.045), new THREE.MeshBasicMaterial({ map: this.trip.texture, toneMapped: false }));
+    screen.position.set(0.36, d.topY + 0.058, -0.6295);
+    screen.rotation.x = -0.35;
+    screen.userData.noShadow = true;
+    this.group.add(screen);
+    this.drawTrip(0, 0);
+    // sheep bobblehead on the dash (wobbles with the car, like the air freshener)
+    const sb = new GeoBuilder();
+    for (const [x, y, z, r] of [[0, 0.03, 0, 0.032], [0.02, 0.04, 0.012, 0.024], [-0.02, 0.04, -0.01, 0.024], [0.0, 0.05, 0.02, 0.022]] as const)
+      sb.add(new THREE.IcosahedronGeometry(r, 0), 0xf4f1e8, mat(x, y, z), { shade: 0.1, seed: 2 });
+    for (const [x, z] of [[-0.016, -0.014], [0.016, -0.014], [-0.016, 0.016], [0.016, 0.016]] as const) sb.add(new THREE.BoxGeometry(0.008, 0.03, 0.008), 0x1d1d1f, mat(x, 0.008, z));
+    sb.add(new THREE.BoxGeometry(0.07, 0.006, 0.07), 0x1d1d1f, mat(0, -0.006, 0));
+    const sheep = new THREE.Group();
+    sheep.position.set(-0.02, d.topY + 0.012, -0.84);
+    sheep.rotation.y = Math.PI * 0.85;
+    sheep.add(new THREE.Mesh(sb.build(), vertexColored()));
+    this.bobble.position.set(0, 0.05, -0.03);
+    const hb = new GeoBuilder()
+      .add(new THREE.IcosahedronGeometry(0.02, 0), 0x1d1d1f, mat(0, 0.006, -0.012, 0, 0, 0, 1, 1, 1.3))
+      .add(new THREE.IcosahedronGeometry(0.008, 0), 0xf6f3ea, mat(-0.01, 0.014, -0.03))
+      .add(new THREE.IcosahedronGeometry(0.008, 0), 0xf6f3ea, mat(0.01, 0.014, -0.03))
+      .add(new THREE.BoxGeometry(0.014, 0.006, 0.01), 0x1d1d1f, mat(-0.02, 0.012, -0.004, 0, 0, 0.5))
+      .add(new THREE.BoxGeometry(0.014, 0.006, 0.01), 0x1d1d1f, mat(0.02, 0.012, -0.004, 0, 0, -0.5));
+    this.bobble.add(new THREE.Mesh(hb.build(), vertexColored()));
+    sheep.add(this.bobble);
+    this.group.add(sheep);
+  }
+
+  private drawTrip(km: number, timeMs: number) {
+    const t = Math.max(0, timeMs) / 1000;
+    const text = `${km.toFixed(2)}|${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;
+    if (text === this.trip.text) return;
+    this.trip.text = text;
+    const g = this.trip.g;
+    g.fillStyle = '#20301c';
+    g.fillRect(0, 0, 128, 64);
+    g.fillStyle = '#b8f07a';
+    g.font = 'bold 26px monospace';
+    g.textAlign = 'right';
+    g.textBaseline = 'middle';
+    const [a, c] = text.split('|');
+    g.fillText(a, 122, 20);
+    g.font = 'bold 18px monospace';
+    g.fillText(c, 122, 48);
+    g.textAlign = 'left';
+    g.font = 'bold 12px monospace';
+    g.fillStyle = '#7fae55';
+    g.fillText('KM', 6, 20);
+    g.fillText('TIME', 6, 48);
+    this.trip.texture.needsUpdate = true;
   }
 
   setMirrorTexture(tex: THREE.Texture) {
@@ -347,6 +467,20 @@ export class Cockpit {
     this.freshAngle.x = clamp(this.freshAngle.x + this.freshVel.x * dt, -1.2, 1.2);
     this.freshAngle.y = clamp(this.freshAngle.y + this.freshVel.y * dt, -1.2, 1.2);
     this.freshener.rotation.set(this.freshAngle.x, 0, this.freshAngle.y);
+    // the sheep's head nods on its spring
+    const kb = 110;
+    this.bobVel.x += (-kb * this.bobAngle.x - 1.2 * this.bobVel.x + s.accelLocal.z * 3 + s.accelLocal.y * 1.5) * dt;
+    this.bobVel.y += (-kb * this.bobAngle.y - 1.2 * this.bobVel.y - s.accelLocal.x * 3) * dt;
+    this.bobAngle.x = clamp(this.bobAngle.x + this.bobVel.x * dt, -0.9, 0.9);
+    this.bobAngle.y = clamp(this.bobAngle.y + this.bobVel.y * dt, -0.9, 0.9);
+    this.bobble.rotation.set(this.bobAngle.x, 0, this.bobAngle.y);
+    // trip meter
+    this.distance += s.speed * dt;
+    this.trip.timer -= dt;
+    if (this.trip.timer <= 0) {
+      this.trip.timer = 0.25;
+      this.drawTrip(this.distance / 1000, s.timeMs ?? 0);
+    }
 
     const gs: GaugeState = {
       speedKmh: s.speed * 3.6,
@@ -364,5 +498,6 @@ export class Cockpit {
     this.group.removeFromParent();
     this.group.traverse((o) => (o as THREE.Mesh).geometry?.dispose());
     this.gauges.dispose();
+    this.trip.texture.dispose();
   }
 }

@@ -9,7 +9,9 @@ import type { ConnectionStatus, GameSession } from '../multiplayer/Session';
 import { VoiceChat } from '../multiplayer/VoiceChat';
 import type { Renderer } from '../rendering/Renderer';
 import type { StageLength } from '../shared/constants';
-import type { RoomSnapshot, StageMap, StageParams } from '../shared/types';
+import { randomStyle, ROLE_STYLE, sameStyle, STYLE_LIMITS, type PlayerStyle } from '../shared/style';
+import type { Role, RoomSnapshot, StageMap, StageParams } from '../shared/types';
+import { LobbyScene } from '../ui/LobbyScene';
 import { UI } from '../ui/UI';
 import { Input } from './Input';
 import { Settings } from './Settings';
@@ -47,6 +49,10 @@ export class App {
   private menuError = '';
   private unsub: (() => void)[] = [];
   private waitingBanner = false;
+  /** 3D service park behind the main menu and the lobby. */
+  private lobbyScene: LobbyScene;
+  /** Where the look picker returns to. */
+  private garageFrom: 'menu' | 'lobby' = 'menu';
 
   constructor(
     private renderer: Renderer,
@@ -56,6 +62,11 @@ export class App {
     this.audio = new AudioEngine(this.settings);
     this.ui = new UI(uiRoot, this.audio, this.settings);
     this.ui.onAction = (a, d, el) => this.onAction(a, d, el);
+    this.lobbyScene = new LobbyScene(renderer);
+    // your name tag follows the name field
+    this.settings.onChange(() => {
+      if (this.ui.isShown('menu')) this.showMenuScene();
+    });
     renderer.applyQuality(this.settings.data.quality);
     // dev-only debug handle for testing from the console
     if (import.meta.env.DEV) (window as unknown as { __lll: App }).__lll = this;
@@ -125,7 +136,15 @@ export class App {
           this.waitingBanner = false;
           this.ui.banner(null);
         }
-      } else if (this.voice && this.ui.isShown('lobby')) this.ui.setMicLevel(this.voice.level());
+      } else {
+        if (this.voice && this.ui.isShown('lobby')) this.ui.setMicLevel(this.voice.level());
+        if (this.ui.isShown('menu') || this.ui.isShown('lobby') || this.ui.isShown('garage')) {
+          this.lobbyScene.update(Math.min(dt, 0.1));
+          // wide screens: the panel sits on the right, so push the scene to the left
+          const wide = this.renderer.width > 900 && this.renderer.width / this.renderer.height > 1.15;
+          this.lobbyScene.render(wide ? 0.16 : 0, wide ? 0 : 0.08);
+        }
+      }
     } catch (err) {
       console.error(err);
     }
@@ -172,6 +191,57 @@ export class App {
     this.menuError = '';
     this.ui.show('menu');
     this.input.gameplay = false;
+    this.lobbyScene.setFocus(false);
+    this.showMenuScene();
+  }
+
+  /** Main menu scene: just you, next to the car (in your livery), in the chosen stage's light. */
+  private showMenuScene() {
+    const style = this.settings.style;
+    this.lobbyScene.setLook(this.menuMap, this.menuNight);
+    this.lobbyScene.setLivery(style.livery);
+    this.lobbyScene.setSlots([{ name: this.settings.data.name, role: null, ready: false, me: true, connected: true, style, menu: true }]);
+  }
+
+  // ================================================================ garage ==
+  private openGarage() {
+    this.garageFrom = this.ui.isShown('lobby') ? 'lobby' : 'menu';
+    if (this.garageFrom === 'menu') this.ui.menuValues(); // keep a freshly typed name
+    this.ui.hideAll();
+    this.renderGarage();
+    this.ui.show('garage');
+    this.lobbyScene.setFocus(true);
+  }
+
+  private renderGarage() {
+    this.ui.renderGarage(this.settings.style, this.garageFrom === 'lobby');
+    if (this.garageFrom === 'lobby') this.renderLobby();
+    else this.showMenuScene();
+  }
+
+  private setStyle(style: PlayerStyle) {
+    if (sameStyle(style, this.settings.style)) return;
+    this.settings.setStyle(style);
+    this.online?.setStyle(style);
+    this.renderGarage();
+  }
+
+  private closeGarage() {
+    this.lobbyScene.setFocus(false);
+    if (this.garageFrom === 'lobby' && this.online?.room) this.showLobby();
+    else this.showMenu();
+  }
+
+  /** Who looks like what on the stage. Local games: your partner (or the AI) gets a contrasting look. */
+  private crewStyles(): Record<Role, PlayerStyle> {
+    const room = this.online?.room;
+    if (this.mode === 'online' && room) {
+      const of = (r: Role) => room.players.find((pl) => pl.role === r)?.style ?? ROLE_STYLE[r];
+      return { driver: of('driver'), navigator: of('navigator') };
+    }
+    const mine = this.settings.style;
+    const other = sameStyle(mine, ROLE_STYLE.navigator) ? ROLE_STYLE.driver : ROLE_STYLE.navigator;
+    return { driver: mine, navigator: { ...other, livery: mine.livery } };
   }
 
   // ================================================================ actions ==
@@ -188,6 +258,21 @@ export class App {
       case 'map':
         this.menuMap = data.map === 'mountain' ? 'mountain' : 'countryside';
         this.showMenu();
+        break;
+      case 'garage':
+        this.openGarage();
+        break;
+      case 'style': {
+        const key = data.key as keyof PlayerStyle;
+        const value = Number(data.value);
+        if (key in STYLE_LIMITS && Number.isInteger(value) && value >= 0 && value < STYLE_LIMITS[key]) this.setStyle({ ...this.settings.style, [key]: value });
+        break;
+      }
+      case 'style-random':
+        this.setStyle(randomStyle());
+        break;
+      case 'garage-done':
+        this.closeGarage();
         break;
       case 'create':
         void this.createOnline();
@@ -300,6 +385,7 @@ export class App {
   private ensureOnline(): OnlineSession {
     if (!this.online) {
       this.online = new OnlineSession();
+      this.online.style = this.settings.style;
       this.session = this.online;
       this.mode = 'online';
       this.voice = new VoiceChat(this.online, this.settings);
@@ -378,6 +464,7 @@ export class App {
 
   private showLobby() {
     this.ui.hideAll();
+    this.lobbyScene.setFocus(false);
     this.renderLobby();
     this.ui.show('lobby');
   }
@@ -387,6 +474,19 @@ export class App {
     if (!s?.room) return;
     const v = this.voice;
     this.ui.renderLobby(s.room, s.playerId, s.status, v ? { state: v.state, error: v.error, muted: v.muted } : null, this.lobbyMsg);
+    // the crew in 3D: both seats, a ghost where nobody has joined yet
+    const room = s.room;
+    this.lobbyScene.setLook(room.stage.map, room.stage.night);
+    // the car wears the driver's livery (yours while you are picking one)
+    const me = room.players.find((pl) => pl.id === s.playerId);
+    const driver = room.players.find((pl) => pl.role === 'driver');
+    this.lobbyScene.setLivery(this.ui.isShown('garage') ? this.settings.style.livery : (driver ?? me)?.style.livery ?? this.settings.style.livery);
+    this.lobbyScene.setSlots([0, 1].map((i) => {
+      const pl = room.players[i];
+      // your own look straight from the settings (the room echoes it back a moment later)
+      const style = pl?.id === s.playerId ? this.settings.style : pl?.style;
+      return pl && style ? { name: pl.name, role: pl.role, ready: pl.ready, me: pl.id === s.playerId, connected: pl.connected, style } : null;
+    }));
   }
 
   private onRoom(room: RoomSnapshot) {
@@ -394,10 +494,11 @@ export class App {
       if (this.game) {
         this.disposeGame();
         this.showLobby();
-      } else if (this.ui.isShown('lobby') || this.ui.isShown('results')) this.showLobby();
+      } else if (this.ui.isShown('garage')) this.renderLobby();
+      else if (this.ui.isShown('lobby') || this.ui.isShown('results')) this.showLobby();
       else if (this.ui.isShown('loading')) this.showLobby();
       this.renderLobby();
-    } else if (this.ui.isShown('lobby')) this.renderLobby();
+    } else if (this.ui.isShown('lobby') || this.ui.isShown('garage')) this.renderLobby();
     if (this.ui.isShown('results') && this.game?.results) this.showResults();
   }
 
@@ -423,7 +524,7 @@ export class App {
     this.ui.setLoading(0, 'Preparing…');
     this.ui.show('loading');
     await nextFrame();
-    const game = new Game({ renderer: this.renderer, input: this.input, settings: this.settings, audio: this.audio, ui: this.ui, session, mode: this.mode });
+    const game = new Game({ renderer: this.renderer, input: this.input, settings: this.settings, audio: this.audio, ui: this.ui, session, mode: this.mode, crew: this.crewStyles() });
     let hash: number;
     try {
       hash = await game.load(params, async (f, text) => {
