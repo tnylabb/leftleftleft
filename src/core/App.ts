@@ -132,19 +132,27 @@ export class App {
     this.scheduleFrame();
   };
 
+  /**
+   * Health check. A sleeping free-tier host (e.g. Render) takes up to a minute to
+   * wake, so each attempt waits long enough, and an offline server is re-checked
+   * every few seconds while the menu is open.
+   */
   private async checkServer() {
     const base = ((import.meta.env.VITE_SERVER_URL as string | undefined) || '').replace(/\/+$/, '');
+    let ok = false;
     try {
       const ctrl = new AbortController();
-      const timer = window.setTimeout(() => ctrl.abort(), 3500);
+      const timer = window.setTimeout(() => ctrl.abort(), 60000);
       const res = await fetch(`${base}/health`, { signal: ctrl.signal, cache: 'no-store' });
       window.clearTimeout(timer);
-      const ok = res.ok && (await res.json().catch(() => null))?.ok === true;
-      this.serverStatus = ok ? 'online' : 'offline';
+      ok = res.ok && (await res.json().catch(() => null))?.ok === true;
     } catch {
-      this.serverStatus = 'offline';
+      ok = false;
     }
-    if (this.ui.isShown('menu')) this.showMenu();
+    const changed = this.serverStatus !== (ok ? 'online' : 'offline');
+    this.serverStatus = ok ? 'online' : 'offline';
+    if (changed && this.ui.isShown('menu')) this.showMenu();
+    if (!ok) window.setTimeout(() => void this.checkServer(), 5000);
   }
 
   private savedSeatCode(): string | null {

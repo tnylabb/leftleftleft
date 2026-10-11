@@ -121,7 +121,7 @@ export class UI {
     const s = this.screens.get('menu')!;
     const name = esc(this.settings.data.name);
     const statusText =
-      opts.server === 'online' ? 'Game server online' : opts.server === 'checking' ? 'Checking game server…' : 'Game server offline – online play unavailable';
+      opts.server === 'online' ? 'Game server online' : opts.server === 'checking' ? 'Connecting to the game server (waking it up can take up to a minute)…' : 'Game server offline – retrying…';
     const lenBtn = (l: StageLength, label: string) => `<button class="btn small ${opts.length === l ? 'selected' : ''}" data-action="length" data-length="${l}"><span>${label}</span></button>`;
     s.innerHTML = `
       <div class="menu-layout">
