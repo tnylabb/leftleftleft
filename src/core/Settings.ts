@@ -1,9 +1,13 @@
 // Persistent player settings (localStorage).
 
+import { decodeStyle, DEFAULT_STYLE, encodeStyle, randomStyle, type PlayerStyle } from '../shared/style';
+
 export type Quality = 'low' | 'medium' | 'high';
 
 export interface SettingsData {
   name: string;
+  /** Your look (helmet.suit.skin.face.livery), see shared/style. */
+  style: string;
   masterVolume: number;
   engineVolume: number;
   environmentVolume: number;
@@ -25,6 +29,7 @@ export interface SettingsData {
 
 const DEFAULTS: SettingsData = {
   name: '',
+  style: '',
   masterVolume: 0.8,
   engineVolume: 0.8,
   environmentVolume: 0.7,
@@ -65,7 +70,18 @@ export class Settings {
     } catch {
       /* storage unavailable - keep defaults */
     }
-    if (!this.data.name) this.data.name = randomName();
+    // keep a generated name: it is your name tag in the lobby
+    if (!this.data.name) this.set('name', randomName());
+    // and a random look to start with
+    if (!decodeStyle(this.data.style)) this.set('style', encodeStyle(randomStyle()));
+  }
+
+  get style(): PlayerStyle {
+    return decodeStyle(this.data.style) ?? { ...DEFAULT_STYLE };
+  }
+
+  setStyle(style: PlayerStyle) {
+    this.set('style', encodeStyle(style));
   }
 
   get<K extends keyof SettingsData>(k: K): SettingsData[K] {
@@ -88,8 +104,8 @@ export class Settings {
   }
 
   reset() {
-    const name = this.data.name;
-    this.data = { ...DEFAULTS, name };
+    const { name, style } = this.data;
+    this.data = { ...DEFAULTS, name, style };
     this.set('name', name);
   }
 }

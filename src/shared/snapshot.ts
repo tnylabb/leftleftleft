@@ -89,6 +89,17 @@ export const cabinPoseOffset = (index: number) => (index === 0 ? CABIN.tablet : 
 export const PROP_STRIDE = 8;
 export const MAX_PROPS_PER_MSG = 48;
 
+/** Joins two props packs (either may be null) into one message. */
+export function mergeProps(a: Float32Array | null, b: Float32Array | null): Float32Array | null {
+  if (!a || !a[0]) return b;
+  if (!b || !b[0]) return a;
+  const out = new Float32Array(a.length + b.length - 1);
+  out[0] = a[0] + b[0];
+  out.set(a.subarray(1), 1);
+  out.set(b.subarray(1), a.length);
+  return out;
+}
+
 export function toArrayBuffer(arr: Float32Array): ArrayBuffer {
   if (arr.byteOffset === 0 && arr.byteLength === arr.buffer.byteLength) return arr.buffer as ArrayBuffer;
   return arr.slice().buffer as ArrayBuffer;

@@ -11,7 +11,7 @@ import type { Settings } from '../core/Settings';
 import type { CabinPhysics } from '../physics/CabinPhysics';
 import { CABIN_BODY } from '../shared/constants';
 import { clamp } from '../shared/math';
-import type { CalloutId } from '../shared/types';
+import type { AnimalKind, CalloutId } from '../shared/types';
 import { NAV_HOTKEYS } from '../navigation/Callouts';
 
 export interface NavContext {
@@ -24,6 +24,8 @@ export interface NavContext {
   doorHandle: THREE.Object3D | null;
   enabled: boolean;
   lastDirectional: 'left' | 'right';
+  /** What is on the road ahead (for the animal callout key). */
+  animalAhead: AnimalKind | null;
 }
 
 export interface NavActions {
@@ -227,7 +229,7 @@ export class NavigatorControls {
     // callouts
     for (const hk of NAV_HOTKEYS) {
       if (i.wasPressed(hk.code)) {
-        a.callout = hk.id === 'other' ? (ctx.lastDirectional === 'left' ? 'otherLeft' : 'otherRight') : hk.id;
+        a.callout = hk.id === 'other' ? (ctx.lastDirectional === 'left' ? 'otherLeft' : 'otherRight') : hk.id === 'animal' ? ctx.animalAhead ?? 'cow' : hk.id;
       }
     }
     if (this.pressed(k.readNote)) a.readNote = true;

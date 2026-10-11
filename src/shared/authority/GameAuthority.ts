@@ -69,7 +69,7 @@ type Phase = 'countdown' | 'racing' | 'finished';
 
 const ALLOWED_CALLOUTS: CalloutId[] = [
   'left', 'left3', 'right', 'right3', 'otherLeft', 'otherRight', 'brake', 'straight',
-  'missed', 'accelerating', 'jump', 'wrongWay', 'dropped', 'nice', 'ouch', 'note',
+  'missed', 'accelerating', 'jump', 'wrongWay', 'dropped', 'nice', 'ouch', 'sheep', 'cow', 'tractor', 'note',
 ];
 
 /** Off the road and this far (m) below it counts as fallen off. */
@@ -464,7 +464,7 @@ export class GameAuthority {
     if (strength < 1) return;
     this.lastImpactAt = now;
     const dl = Math.hypot(r.dx, r.dy, r.dz) || 1;
-    const kinds: ImpactFx['kind'][] = ['tree', 'rock', 'terrain', 'bale', 'landing', 'other'];
+    const kinds: ImpactFx['kind'][] = ['tree', 'rock', 'terrain', 'bale', 'animal', 'landing', 'other'];
     const kind = kinds.includes(r.kind) ? r.kind : 'other';
     const fx: ImpactFx = { strength, dx: r.dx / dl, dy: r.dy / dl, dz: r.dz / dl, kind };
     this.out.impact(fx);

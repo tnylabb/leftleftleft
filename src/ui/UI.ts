@@ -4,6 +4,7 @@
 import type { AudioEngine } from '../audio/AudioEngine';
 import type { Settings, SettingsData } from '../core/Settings';
 import { GAME_TAGLINE, type StageLength } from '../shared/constants';
+import { FACES, HELMETS, LIVERIES, SKINS, SUITS, type PlayerStyle } from '../shared/style';
 import type { RaceResults, Role, RoomSnapshot, StageMap } from '../shared/types';
 import type { ConnectionStatus } from '../multiplayer/Session';
 import type { VoiceState } from '../multiplayer/VoiceChat';
@@ -13,7 +14,9 @@ import { referenceHtml, type Row } from './controlsHelp';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-export type ScreenName = 'menu' | 'lobby' | 'loading' | 'pause' | 'settings' | 'help' | 'results' | 'fatal';
+export type ScreenName = 'menu' | 'lobby' | 'garage' | 'loading' | 'pause' | 'settings' | 'help' | 'results' | 'fatal';
+
+const css = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
 
 export interface HudView {
   role: Role;
@@ -66,8 +69,9 @@ export class UI {
   ) {
     this.root = root;
     root.innerHTML = `
-      <div class="screen menu-bg" id="scr-menu"></div>
-      <div class="screen menu-bg" id="scr-lobby"></div>
+      <div class="screen scene-bg" id="scr-menu"></div>
+      <div class="screen scene-bg" id="scr-lobby"></div>
+      <div class="screen scene-bg" id="scr-garage"></div>
       <div class="screen menu-bg" id="scr-loading"></div>
       <div id="hud"></div>
       <div id="subtitle"></div>
@@ -82,7 +86,7 @@ export class UI {
       <div class="screen dim-bg" id="scr-help"></div>
       <div class="screen dim-bg" id="scr-settings"></div>
       <div class="screen menu-bg fatal" id="scr-fatal"></div>`;
-    for (const n of ['menu', 'lobby', 'loading', 'pause', 'settings', 'help', 'results', 'fatal'] as ScreenName[]) {
+    for (const n of ['menu', 'lobby', 'garage', 'loading', 'pause', 'settings', 'help', 'results', 'fatal'] as ScreenName[]) {
       this.screens.set(n, root.querySelector(`#scr-${n}`) as HTMLElement);
     }
     this.hud = root.querySelector('#hud') as HTMLElement;
@@ -127,32 +131,42 @@ export class UI {
     const lenBtn = (l: StageLength, label: string) => `<button class="btn small ${opts.length === l ? 'selected' : ''}" data-action="length" data-length="${l}"><span>${label}</span></button>`;
     s.innerHTML = `
       <div class="menu-layout">
-        <div>
-          <h1 class="title"><span class="l1">LEFT!</span> <span class="l2">LEFT!</span><br><span class="l3">LEFT!</span></h1>
-          <div class="tagline">${GAME_TAGLINE}</div>
-          <p class="muted" style="max-width:520px;margin-top:22px">An asymmetric co-op rally game. One player drives blind from the cockpit.
-          The other holds a very real, very droppable navigation tablet and shouts directions.</p>
-          <p class="muted small"><span class="status-dot ${opts.server === 'checking' ? 'connecting' : opts.server}"></span>${statusText}</p>
+        <div class="menu-hero">
+          <div>
+            <h1 class="title"><span class="l1">LEFT!</span> <span class="l2">LEFT!</span><br><span class="l3">LEFT!</span></h1>
+            <div class="tagline">${GAME_TAGLINE}</div>
+          </div>
+          <div class="hero-foot">
+            <p class="blurb">An asymmetric co-op rally game. One player drives blind from the cockpit. The other holds a very
+            real, very droppable navigation tablet and shouts directions.</p>
+            <div class="chip"><span class="status-dot ${opts.server === 'checking' ? 'connecting' : opts.server}"></span>${statusText}</div>
+          </div>
         </div>
-        <div class="panel stack">
+        <div class="panel stack menu-panel">
           <h2 class="tape">START ENGINE</h2>
           <label class="field">Your name
             <input type="text" id="in-name" maxlength="16" value="${name}" data-enter="create">
           </label>
+          <button class="btn look-btn" data-action="garage"><span>CHANGE YOUR LOOK<span class="sub">Helmet, race suit, face and the car's livery</span></span></button>
           <div class="error-box ${opts.error ? 'show' : ''}">${esc(opts.error ?? '')}</div>
+          <div class="section-label">PLAY ONLINE</div>
           ${opts.seat ? `<button class="btn green" data-action="rejoin"><span>REJOIN ROOM ${esc(opts.seat)}<span class="sub">Get back into your running session</span></span></button>` : ''}
-          <button class="btn primary" data-action="create" ${opts.server !== 'online' ? 'disabled' : ''}><span>CREATE ONLINE GAME<span class="sub">Get a room code for your co-driver</span></span></button>
+          <button class="btn primary big" data-action="create" ${opts.server !== 'online' ? 'disabled' : ''}><span>CREATE ONLINE GAME<span class="sub">Get a room code for your co-driver</span></span></button>
           <div class="row">
             <input type="text" class="code" id="in-code" maxlength="4" placeholder="CODE" data-enter="join">
             <button class="btn grow" data-action="join" ${opts.server !== 'online' ? 'disabled' : ''}><span>JOIN WITH CODE</span></button>
           </div>
-          <div class="row" style="margin-top:6px"><span class="muted small">Local stage:</span>
+          <div class="section-label">PLAY HERE</div>
+          <div class="row">
+            <button class="btn grow" data-action="couch"><span>SPLIT SCREEN<span class="sub">Two players, one keyboard + mouse</span></span></button>
+            <button class="btn grow" data-action="solo"><span>SOLO PRACTICE<span class="sub">AI co-driver reads the notes</span></span></button>
+          </div>
+          <div class="section-label">STAGE <span class="muted small">(local games)</span></div>
+          <div class="stage-card">
             <div class="seg"><button class="btn small ${opts.map === 'countryside' ? 'selected' : ''}" data-action="map" data-map="countryside"><span>COUNTRYSIDE</span></button><button class="btn small ${opts.map === 'mountain' ? 'selected' : ''}" data-action="map" data-map="mountain"><span>MOUNTAIN</span></button></div>
             <div class="seg">${lenBtn('short', 'SHORT')}${lenBtn('medium', 'MEDIUM')}${lenBtn('long', 'LONG')}</div>
             <div class="seg"><button class="btn small ${!opts.night ? 'selected' : ''}" data-action="time" data-night="0"><span>DAY</span></button><button class="btn small ${opts.night ? 'selected' : ''}" data-action="time" data-night="1"><span>NIGHT</span></button></div>
           </div>
-          <button class="btn" data-action="couch"><span>COUCH CO-OP · SPLIT SCREEN<span class="sub">Two players, one keyboard + mouse (local dev mode)</span></span></button>
-          <button class="btn" data-action="solo"><span>SOLO PRACTICE<span class="sub">You drive, an AI co-driver reads the notes</span></span></button>
           <div class="row">
             <button class="btn dark small grow" data-action="settings"><span>SETTINGS</span></button>
             <button class="btn dark small grow" data-action="help"><span>HOW TO PLAY</span></button>
@@ -175,19 +189,23 @@ export class UI {
     const s = this.screens.get('lobby')!;
     const me = room.players.find((p) => p.id === myId);
     const host = !!me?.isHost;
-    const card = (i: number) => {
+    const crewRow = (i: number) => {
       const p = room.players[i];
-      if (!p) return `<div class="player-card empty">Waiting for a co-driver…<br><span class="small">Share the room code</span></div>`;
-      return `<div class="player-card ${p.id === myId ? 'me' : ''}">
-        <div class="name">${esc(p.name)} ${p.isHost ? '<span class="small muted">(host)</span>' : ''}</div>
-        <div class="role-badge ${p.role ?? ''}">${p.role ? p.role.toUpperCase() : 'NO ROLE'}</div>
-        <div class="ready ${p.ready ? 'yes' : ''}">${p.ready ? 'READY' : 'NOT READY'}</div>
-        <div class="small muted" style="margin-top:8px">${p.connected ? '<span class="status-dot online"></span>connected' : '<span class="status-dot reconnecting"></span>reconnecting…'}${p.id === myId ? ' · you' : ''}</div>
+      if (!p) return `<div class="crew-row empty"><span class="crew-name">Waiting for a co-driver…</span><span class="small muted">share the room code</span></div>`;
+      return `<div class="crew-row ${p.id === myId ? 'me' : ''}">
+        <span class="role-badge ${p.role ?? ''}">${p.role ? p.role.toUpperCase() : 'NO ROLE'}</span>
+        <span class="crew-name">${esc(p.name)}${p.id === myId ? ' <span class="small muted">(you)</span>' : ''}${p.isHost ? ' <span class="small muted">· host</span>' : ''}</span>
+        ${p.connected ? '' : '<span class="small" style="color:var(--yellow)">reconnecting…</span>'}
+        <span class="ready ${p.ready ? 'yes' : ''}">${p.ready ? 'READY' : 'NOT READY'}</span>
       </div>`;
     };
     const taken = (r: Role) => room.players.some((p) => p.role === r && p.id !== myId);
+    const icon = (r: Role) =>
+      r === 'driver'
+        ? '<svg viewBox="0 0 40 40" class="role-icon"><circle cx="20" cy="20" r="15" fill="none" stroke="currentColor" stroke-width="4"/><circle cx="20" cy="20" r="4" fill="currentColor"/><path d="M5 20h11M24 20h11M20 24v11" stroke="currentColor" stroke-width="4"/></svg>'
+        : '<svg viewBox="0 0 40 40" class="role-icon"><rect x="6" y="9" width="28" height="22" rx="3" fill="none" stroke="currentColor" stroke-width="4"/><path d="M13 25l7-10 7 10" fill="none" stroke="currentColor" stroke-width="3"/></svg>';
     const roleBtn = (r: Role, title: string, sub: string) =>
-      `<button class="btn ${me?.role === r ? 'selected' : ''}" data-action="role" data-role="${r}" ${taken(r) ? 'disabled' : ''}><span>${title}<span class="sub">${sub}</span></span></button>`;
+      `<button class="btn role-tile ${r} ${me?.role === r ? 'selected' : ''}" data-action="role" data-role="${r}" ${taken(r) ? 'disabled' : ''}><span>${icon(r)}<span class="role-text">${title}${taken(r) ? ' <span class="small">(taken)</span>' : ''}<span class="sub">${sub}</span></span></span></button>`;
     const len = (l: StageLength, label: string) =>
       `<button class="btn small ${room.stage.length === l ? 'selected' : ''}" data-action="stage" data-length="${l}" ${host ? '' : 'disabled'}><span>${label}</span></button>`;
     const bothRoles = room.players.length === 2 && room.players.every((p) => p.role);
@@ -201,32 +219,85 @@ export class UI {
           ${voice.error ? `<span class="small" style="color:#ff8a7a">${esc(voice.error)}</span>` : ''}
           <span class="small muted">or use Discord / any voice app</span></div>`
       : '';
+    const hint = msg || (room.players.length < 2 ? 'Send the code to your co-driver. They open this page and choose JOIN WITH CODE.' : !bothRoles ? 'Pick different roles.' : 'Both players must be ready to start.');
     s.innerHTML = `
-      <div class="panel lobby">
-        <div class="row" style="justify-content:space-between">
-          <div><h2 class="tape">LOBBY</h2><div class="muted small"><span class="status-dot ${status}"></span>${status}</div></div>
-          <div style="text-align:right"><div class="muted small">ROOM CODE</div><div class="room-code">${esc(room.code)}</div>
-            <button class="btn small dark" data-action="copy-code" data-code="${esc(room.code)}"><span>COPY</span></button></div>
+      <div class="lobby-layout">
+        <div class="lobby-hero">
+          <div class="room-plate">
+            <div class="k">ROOM CODE</div>
+            <div class="room-code">${esc(room.code)}</div>
+            <button class="btn small" data-action="copy-code" data-code="${esc(room.code)}"><span>COPY CODE</span></button>
+          </div>
+          <div class="lobby-hint">${esc(hint)}</div>
         </div>
-        <div class="players">${card(0)}${card(1)}</div>
-        <div class="role-pick">
-          ${roleBtn('driver', 'DRIVER', 'Steer, brake, survive. No map for you.')}
-          ${roleBtn('navigator', 'NAVIGATOR', 'Hold the tablet. Shout. Don’t drop it.')}
+        <div class="panel lobby-panel stack">
+          <div class="row" style="justify-content:space-between">
+            <h2 class="tape">LOBBY</h2>
+            <div class="chip"><span class="status-dot ${status}"></span>${status}</div>
+          </div>
+          <div class="section-label">YOUR ROLE</div>
+          <div class="role-pick">
+            ${roleBtn('driver', 'DRIVER', 'Steer, brake, survive. No map for you.')}
+            ${roleBtn('navigator', 'NAVIGATOR', 'Hold the tablet. Shout. Don’t drop it.')}
+          </div>
+          <button class="btn small look-btn" data-action="garage"><span>CHANGE YOUR LOOK</span></button>
+          <div class="section-label">CREW</div>
+          <div class="crew">${crewRow(0)}${crewRow(1)}</div>
+          <div class="section-label">STAGE${host ? '' : ' <span class="muted small">(host decides)</span>'}</div>
+          <div class="stage-card">
+            <div class="seg"><button class="btn small ${room.stage.map === 'countryside' ? 'selected' : ''}" data-action="stage-map" data-map="countryside" ${host ? '' : 'disabled'}><span>COUNTRYSIDE</span></button><button class="btn small ${room.stage.map === 'mountain' ? 'selected' : ''}" data-action="stage-map" data-map="mountain" ${host ? '' : 'disabled'}><span>MOUNTAIN</span></button></div>
+            <div class="seg">${len('short', 'SHORT')}${len('medium', 'MEDIUM')}${len('long', 'LONG')}</div>
+            <div class="seg"><button class="btn small ${!room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="0" ${host ? '' : 'disabled'}><span>DAY</span></button><button class="btn small ${room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="1" ${host ? '' : 'disabled'}><span>NIGHT</span></button></div>
+            <div class="row"><span class="muted small">seed ${room.stage.seed}</span>${host ? `<button class="btn small dark" data-action="reroll"><span>NEW ROAD</span></button>` : ''}</div>
+          </div>
+          ${voiceHtml}
+          <div class="row" style="margin-top:6px">
+            <button class="btn primary grow big ${me?.role && bothRoles && !me.ready ? 'pulse' : ''}" data-action="ready" ${me?.role && bothRoles ? '' : 'disabled'}><span>${me?.ready ? 'NOT READY' : 'READY!'}</span></button>
+            <button class="btn dark" data-action="leave"><span>LEAVE</span></button>
+          </div>
         </div>
-        <div class="row" style="margin-top:14px">
-          <span class="muted small">Stage${host ? '' : ' (host decides)'}:</span>
-          <div class="seg"><button class="btn small ${room.stage.map === 'countryside' ? 'selected' : ''}" data-action="stage-map" data-map="countryside" ${host ? '' : 'disabled'}><span>COUNTRYSIDE</span></button><button class="btn small ${room.stage.map === 'mountain' ? 'selected' : ''}" data-action="stage-map" data-map="mountain" ${host ? '' : 'disabled'}><span>MOUNTAIN</span></button></div>
-          <div class="seg">${len('short', 'SHORT')}${len('medium', 'MEDIUM')}${len('long', 'LONG')}</div>
-          <div class="seg"><button class="btn small ${!room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="0" ${host ? '' : 'disabled'}><span>DAY</span></button><button class="btn small ${room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="1" ${host ? '' : 'disabled'}><span>NIGHT</span></button></div>
-          <span class="muted small">seed ${room.stage.seed}</span>
-          ${host ? `<button class="btn small dark" data-action="reroll"><span>NEW ROAD</span></button>` : ''}
+      </div>`;
+  }
+
+  // --- garage: helmet, suit, skin, face and livery ---------------------------
+  renderGarage(style: PlayerStyle, online: boolean) {
+    const s = this.screens.get('garage')!;
+    const sw = (key: keyof PlayerStyle, i: number, title: string, bg: string, cls = '') =>
+      `<button class="swatch ${cls} ${style[key] === i ? 'selected' : ''}" data-action="style" data-key="${key}" data-value="${i}" title="${esc(title)}" aria-label="${esc(title)}" style="background:${bg}"></button>`;
+    const helmets = HELMETS.map((h, i) => sw('helmet', i, h.name, `linear-gradient(90deg, ${css(h.base)} 0 38%, ${css(h.stripe)} 38% 62%, ${css(h.base)} 62%)`)).join('');
+    const suits = SUITS.map((u, i) => sw('suit', i, u.name, `linear-gradient(90deg, ${css(u.accent)} 0 22%, ${css(u.base)} 22% 78%, ${css(u.accent)} 78%)`)).join('');
+    const skins = SKINS.map((c, i) => sw('skin', i, 'Skin tone', css(c), 'round')).join('');
+    const faces = FACES.map((f, i) => `<button class="btn small ${style.face === i ? 'selected' : ''}" data-action="style" data-key="face" data-value="${i}"><span>${esc(f.toUpperCase())}</span></button>`).join('');
+    const liveries = LIVERIES.map((l, i) =>
+      sw('livery', i, l.name, `linear-gradient(180deg, ${css(l.body)} 0 40%, ${css(l.stripeA)} 40% 62%, ${css(l.body)} 62% 70%, ${css(l.stripeB)} 70% 78%, ${css(l.body)} 78%)`, 'wide'),
+    ).join('');
+    s.innerHTML = `
+      <div class="menu-layout">
+        <div class="menu-hero">
+          <div>
+            <h1 class="title garage-title"><span class="l1">YOUR</span> <span class="l3">LOOK</span></h1>
+            <div class="tagline">HELMET ON. SUIT UP. PAINT THE CAR.</div>
+          </div>
+          <div class="hero-foot">
+            <p class="blurb">${online ? 'Your co-driver sees all of it, in the lobby and on the stage.' : 'This is how you look on the stage.'} The car always wears the <b>driver's</b> livery.</p>
+          </div>
         </div>
-        <div style="margin-top:12px">${voiceHtml}</div>
-        <div class="row" style="margin-top:16px">
-          <button class="btn primary grow" data-action="ready" ${me?.role && bothRoles ? '' : 'disabled'}><span>${me?.ready ? 'NOT READY' : 'READY!'}</span></button>
-          <button class="btn dark" data-action="leave"><span>LEAVE</span></button>
+        <div class="panel stack menu-panel garage-panel">
+          <h2 class="tape">PIT GARAGE</h2>
+          <div class="section-label">HELMET <span class="muted small">${esc(HELMETS[style.helmet].name)}</span></div>
+          <div class="swatches">${helmets}</div>
+          <div class="section-label">RACE SUIT <span class="muted small">${esc(SUITS[style.suit].name)}</span></div>
+          <div class="swatches">${suits}</div>
+          <div class="section-label">FACE</div>
+          <div class="swatches">${skins}</div>
+          <div class="seg wrap">${faces}</div>
+          <div class="section-label">CAR LIVERY <span class="muted small">${esc(LIVERIES[style.livery].name)}</span></div>
+          <div class="swatches">${liveries}</div>
+          <div class="row" style="margin-top:6px">
+            <button class="btn dark grow" data-action="style-random"><span>SURPRISE ME</span></button>
+            <button class="btn primary grow big" data-action="garage-done"><span>DONE</span></button>
+          </div>
         </div>
-        <p class="muted small">${esc(msg || (room.players.length < 2 ? 'Send the code to your co-driver. They open this page and choose JOIN.' : !bothRoles ? 'Pick different roles.' : 'Both players must be ready to start.'))}</p>
       </div>`;
   }
 
@@ -259,7 +330,7 @@ export class UI {
       el.style.height = `${v.rect.h * 100}%`;
       const callouts =
         v.role === 'navigator'
-          ? `<div class="tab-callouts"><h4>CALLOUTS</h4>${NAV_HOTKEYS.map((h) => `<kbd>${h.key}</kbd> ${h.id === 'other' ? 'NO, THE OTHER…' : CALLOUT_TEXT[h.id]}`).join('<br>')}</div>`
+          ? `<div class="tab-callouts"><h4>CALLOUTS</h4>${NAV_HOTKEYS.map((h) => `<kbd>${h.key}</kbd> ${h.id === 'other' ? 'NO, THE OTHER…' : h.id === 'animal' ? 'COW! / SHEEP! / TRACTOR!' : CALLOUT_TEXT[h.id]}`).join('<br>')}</div>`
           : '';
       el.innerHTML = `
         ${v.role === 'driver' ? '<div class="hud-glare"></div>' : ''}

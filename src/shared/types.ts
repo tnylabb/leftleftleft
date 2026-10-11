@@ -1,4 +1,5 @@
 import type { StageLength } from './constants';
+import type { PlayerStyle } from './style';
 
 export type Role = 'driver' | 'navigator';
 export type DoorSide = 'left' | 'right';
@@ -54,6 +55,23 @@ export interface HayBale {
   heading: number;
 }
 
+export type AnimalKind = 'sheep' | 'cow' | 'tractor';
+
+/** Livestock / farm traffic at the start of the stage (see stage/animals). */
+export interface AnimalSpawn {
+  /** Network id (ANIMAL_ID_BASE + index). */
+  id: number;
+  kind: AnimalKind;
+  x: number;
+  z: number;
+  /** Nearest road sample. */
+  idx: number;
+  /** Road-heading convention (forward = (sin h, -cos h)). */
+  heading: number;
+  /** Flock number (sheep), -1 otherwise. */
+  flock: number;
+}
+
 export interface Checkpoint {
   index: number; // ordinal (0-based)
   idx: number; // road sample index
@@ -75,6 +93,7 @@ export interface StageData {
   jumps: Jump[];
   puddles: Puddle[];
   bales: HayBale[];
+  animals: AnimalSpawn[];
   checkpoints: Checkpoint[];
   /** Road half width per sample (narrow mountain ledges, wider hairpins / run-offs). */
   halfWidths: Float64Array;
@@ -140,7 +159,7 @@ export interface ImpactFx {
   dx: number;
   dy: number;
   dz: number;
-  kind: 'tree' | 'rock' | 'terrain' | 'bale' | 'landing' | 'other';
+  kind: 'tree' | 'rock' | 'terrain' | 'bale' | 'animal' | 'landing' | 'other';
 }
 
 export interface MudFx {
@@ -175,6 +194,9 @@ export type CalloutId =
   | 'dropped'
   | 'nice'
   | 'ouch'
+  | 'sheep'
+  | 'cow'
+  | 'tractor'
   | 'note';
 
 export interface CalloutMsg {
@@ -193,6 +215,8 @@ export interface PlayerInfo {
   connected: boolean;
   loaded: boolean;
   isHost: boolean;
+  /** Helmet, suit, face and the livery they'd paint the car in. */
+  style: PlayerStyle;
 }
 
 export interface RoomSnapshot {

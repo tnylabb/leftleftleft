@@ -3,7 +3,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import { FIXED_DT } from '../shared/constants';
 
-export type Surface = 'road' | 'grass' | 'tree' | 'rock' | 'bale' | 'prop' | 'car';
+export type Surface = 'road' | 'grass' | 'tree' | 'rock' | 'bale' | 'animal' | 'prop' | 'car';
 
 export class PhysicsWorld {
   readonly world: RAPIER.World;

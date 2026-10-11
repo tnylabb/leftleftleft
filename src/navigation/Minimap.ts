@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { canvasTexture } from '../rendering/materials';
 import type { NavInstruction } from '../shared/stage/pacenotes';
 import type { CornerSeverity, StageData } from '../shared/types';
+import type { AnimalMarker } from '../world/Animals';
 
 const W = 512;
 const H = 384;
@@ -24,6 +25,8 @@ export interface MinimapState {
   flash: { text: string; color: string; until: number } | null;
   banner: string | null;
   now: number;
+  /** Livestock / tractors (live positions). */
+  animals?: AnimalMarker[];
 }
 
 export const SEVERITY_COLOR: Record<CornerSeverity, string> = {
@@ -76,6 +79,46 @@ export function drawTurnArrow(g: CanvasRenderingContext2D, x: number, y: number,
   g.lineTo(px + hy * ah * 0.6, py - hx * ah * 0.6);
   g.closePath();
   g.fill();
+  g.restore();
+}
+
+/** Tiny map icons: a fluffy sheep, a spotted cow, a green tractor. */
+export function drawAnimalIcon(g: CanvasRenderingContext2D, x: number, y: number, kind: 'sheep' | 'cow' | 'tractor') {
+  g.save();
+  g.translate(x, y);
+  g.scale(1.6, 1.6);
+  g.lineWidth = 1.5;
+  g.strokeStyle = '#111';
+  if (kind === 'sheep') {
+    g.fillStyle = '#f4f0e4';
+    for (const [dx, dy] of [[-3, 0], [3, 0], [0, -2.5], [0, 2.5]]) {
+      g.beginPath();
+      g.arc(dx, dy, 4, 0, Math.PI * 2);
+      g.fill();
+    }
+    g.fillStyle = '#111';
+    g.beginPath();
+    g.arc(-6.5, -1, 2.6, 0, Math.PI * 2);
+    g.fill();
+  } else if (kind === 'cow') {
+    g.fillStyle = '#f4f0e4';
+    g.fillRect(-7, -4.5, 14, 9);
+    g.strokeRect(-7, -4.5, 14, 9);
+    g.fillStyle = '#111';
+    g.fillRect(-4, -4.5, 4, 4);
+    g.fillRect(2, 0, 4, 4.5);
+    g.fillStyle = '#e8a7a0';
+    g.fillRect(-10, -2.5, 3, 5);
+  } else {
+    g.fillStyle = '#2f9d3a';
+    g.fillRect(-5, -8, 10, 13);
+    g.strokeRect(-5, -8, 10, 13);
+    g.fillStyle = '#111';
+    g.fillRect(-8, 0, 3, 7);
+    g.fillRect(5, 0, 3, 7);
+    g.fillRect(-7, -8, 2, 4);
+    g.fillRect(5, -8, 2, 4);
+  }
   g.restore();
 }
 
@@ -240,6 +283,21 @@ export class Minimap {
             g.fillRect(p[0] - 9 + a * 6, p[1] - 9 + b * 6, 6, 6);
           }
       }
+    }
+
+    // animals: sheep, cows and tractors, with a red ring when they are on the road
+    for (const an of s.animals ?? []) {
+      if (an.idx < idx - 6 || an.idx > ahead) continue;
+      const p = toScreen(an.x, an.z);
+      if (!onScreen(p)) continue;
+      if (an.onRoad) {
+        g.strokeStyle = `rgba(255,59,48,${0.55 + 0.45 * Math.sin(s.now / 120)})`;
+        g.lineWidth = 4;
+        g.beginPath();
+        g.arc(p[0], p[1], an.kind === 'tractor' ? 22 : 18, 0, Math.PI * 2);
+        g.stroke();
+      }
+      drawAnimalIcon(g, p[0], p[1], an.kind);
     }
 
     // the car

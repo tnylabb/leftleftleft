@@ -18,7 +18,7 @@ import { DriverControls } from '../interactions/DriverControls';
 import { NavigatorControls, type NavContext } from '../interactions/NavigatorControls';
 import { GameSession } from '../multiplayer/Session';
 import { SnapshotBuffer, interpolateCar, makePoseInterp } from '../multiplayer/SnapshotBuffer';
-import { AICoDriver, calloutText, Voice } from '../navigation/Callouts';
+import { AICoDriver, CALLOUT_TEXT, calloutText, Voice } from '../navigation/Callouts';
 import { Minimap } from '../navigation/Minimap';
 import { CabinPhysics } from '../physics/CabinPhysics';
 import { PhysicsWorld } from '../physics/PhysicsWorld';
@@ -40,7 +40,7 @@ import {
 } from '../shared/constants';
 import { clamp } from '../shared/math';
 import { RoadLocator } from '../shared/race/RoadLocator';
-import { CABIN, CABIN_FLAG, CAR, CAR_FLAG, cabinPoseOffset } from '../shared/snapshot';
+import { CABIN, CABIN_FLAG, CAR, CAR_FLAG, cabinPoseOffset, MAX_PROPS_PER_MSG, mergeProps } from '../shared/snapshot';
 import { computeInstruction, spokenNote, type NavInstruction } from '../shared/stage/pacenotes';
 import { generateStage, stageStartPose } from '../shared/stage/StageGenerator';
 import type { CalloutMsg, DoorSide, ImpactFx, RaceEvent, RaceResults, RaceStats, Role, SeatStates, StageData, StageParams } from '../shared/types';
@@ -49,7 +49,9 @@ import { TabletModel, buildLooseObjectMeshes } from '../tablet/TabletModel';
 import { controlRows, type ControlsState } from '../ui/controlsHelp';
 import type { HudData, UI } from '../ui/UI';
 import { CarModel } from '../vehicle/CarModel';
+import { LIVERIES, type PlayerStyle } from '../shared/style';
 import { VehicleController } from '../vehicle/VehicleController';
+import { Animals, type AnimalMarker, type AnimalSound, type CarNearby } from '../world/Animals';
 import { Props } from '../world/Props';
 import { Road } from '../world/Road';
 import { Terrain } from '../world/Terrain';
@@ -73,6 +75,8 @@ export interface GameDeps {
   ui: UI;
   session: GameSession;
   mode: GameMode;
+  /** What each crew member looks like; the car wears the driver's livery. */
+  crew: Record<Role, PlayerStyle>;
 }
 
 const _v = new THREE.Vector3();
@@ -100,6 +104,10 @@ export class Game {
   private road!: Road;
   private veg!: Vegetation;
   private props!: Props;
+  private animals!: Animals;
+  private carNear: CarNearby = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), horn: false };
+  private animalMarkers: AnimalMarker[] = [];
+  private animalWarnAt = 0;
   private car!: CarModel;
   private cockpit!: Cockpit;
   private windshield!: Windshield;
@@ -268,6 +276,8 @@ export class Game {
     this.scene.add(this.veg.group);
     this.props = new Props(this.stage, this.field, this.road, this.physics);
     this.scene.add(this.props.group);
+    this.animals = new Animals(this.stage, this.field, this.road, this.physics);
+    this.scene.add(this.animals.group);
     await progress(0.88, 'Bolting the cockpit together…');
     this.buildCar();
     this.particles = new Particles();
@@ -283,20 +293,21 @@ export class Game {
 
   private buildCar() {
     const d = this.d;
-    this.car = new CarModel();
+    const livery = LIVERIES[d.crew.driver.livery] ?? LIVERIES[0];
+    this.car = new CarModel(livery);
     this.car.setHeadlights(this.night);
     this.car.root.traverse((o) => {
       const m = o as THREE.Mesh;
       if (m.isMesh && !(m.material as THREE.Material).transparent) this.bodywork.push(m);
     });
     this.scene.add(this.car.root);
-    this.cockpit = new Cockpit();
+    this.cockpit = new Cockpit(livery);
     this.car.root.add(this.cockpit.group);
     this.windshield = new Windshield({ wiperEnd: () => this.carAudio.wiperSqueak() });
     this.windshield.group.traverse((o) => o.layers.set(LAYER.COCKPIT));
     this.car.root.add(this.windshield.group);
-    this.driverBody = new Occupant('driver');
-    this.navBody = new Occupant('navigator');
+    this.driverBody = new Occupant('driver', d.crew.driver);
+    this.navBody = new Occupant('navigator', d.crew.navigator);
     this.car.root.add(this.driverBody.group, this.navBody.group);
     this.minimap = new Minimap(this.stage);
     this.tablet = new TabletModel(this.minimap.texture, this.night);
@@ -323,8 +334,8 @@ export class Game {
     if (this.roles.includes('navigator')) this.navControls = new NavigatorControls(d.input, d.settings, this.bindMode, d.renderer.canvas);
 
     // on-foot avatars and cameras
-    this.driverAvatar = new FootAvatar('driver');
-    this.navAvatar = new FootAvatar('navigator');
+    this.driverAvatar = new FootAvatar(d.crew.driver, 'driver');
+    this.navAvatar = new FootAvatar(d.crew.navigator, 'navigator');
     this.scene.add(this.driverAvatar.root, this.navAvatar.root);
     const footCam = (role: Role) => {
       const c = new THREE.PerspectiveCamera(fov, 16 / 9, 0.05, 580);
@@ -442,7 +453,10 @@ export class Game {
       s.on('carState', (buf) => this.carBuf?.push(buf, performance.now() / 1000)),
       s.on('cabinState', (buf) => this.cabinBuf?.push(buf, performance.now() / 1000)),
       s.on('propsState', (buf) => {
-        if (!this.simulateCar) this.props.applyRemote(buf);
+        if (!this.simulateCar) {
+          this.props.applyRemote(buf);
+          this.animals.applyRemote(buf);
+        }
       }),
       s.on('carTeleport', (p) => {
         if (this.vehicle) {
@@ -555,6 +569,10 @@ export class Game {
     if (this.cabin) this.cabin.shock(dir, fx.strength);
     const pan = clamp(fx.dx - this.listenerSide() * 0.3, -1, 1);
     this.carAudio.impact(fx.strength, pan, fx.kind);
+    // big hits: eyes wide open
+    const fright = clamp((fx.strength - 2) / 7, 0, 1);
+    this.driverBody.face.startle(fright);
+    this.navBody.face.startle(fright);
     if (fx.kind === 'tree' || fx.kind === 'bale' || fx.kind === 'rock') {
       const p = _v2.set(fx.dx * 1.5, 0.5, fx.dz * 2).applyQuaternion(this.cs.quat).add(this.cs.pos);
       const col = fx.kind === 'tree' ? 0x6b4d33 : fx.kind === 'bale' ? 0xd8b04f : 0x8a877e;
@@ -563,6 +581,13 @@ export class Game {
       }
     }
     if (fx.kind === 'landing') this.dustBurst(14, 0xa38d6c);
+    if (fx.kind === 'animal') {
+      // a cloud of fleece / hair
+      const p = _v2.set(fx.dx * 1.5, 0.7, fx.dz * 2).applyQuaternion(this.cs.quat).add(this.cs.pos);
+      for (let i = 0; i < 14; i++) {
+        this.particles.emit(p.x, p.y, p.z, (Math.random() - 0.5) * 4, Math.random() * 3 + 1, (Math.random() - 0.5) * 4, 0.08 + Math.random() * 0.08, 1.4, 0xf2eee2, 2, 0.6);
+      }
+    }
   }
 
   private onCabinContact(index: number, strength: number) {
@@ -777,6 +802,8 @@ export class Game {
     this.particles.update(dt);
     if (this.vehicle && !frozen) this.emitDriveParticles(dt);
     this.props.updateMeshes(alpha, dt);
+    this.animals.updateMeshes(alpha, dt, this.cs.pos);
+    for (const snd of this.animals.drainSounds()) this.playAnimal(snd);
     this.sky.update(this.cs.pos);
     if (this.cinematic) {
       this.cinematic.trackStart(this.primaryCamera.getWorldPosition(_v));
@@ -785,6 +812,16 @@ export class Game {
     this.updateHud(dt, now);
     this.render();
     this.frameCount++;
+  }
+
+  /** Baa / moo / putt: louder when close, panned to the side it comes from. */
+  private playAnimal(snd: AnimalSound) {
+    const d = Math.hypot(snd.x - this.cs.pos.x, snd.z - this.cs.pos.z);
+    const gain = Math.pow(clamp(1 - d / 70, 0, 1), 1.6);
+    if (gain <= 0.02) return;
+    const right = _v.set(1, 0, 0).applyQuaternion(this.cs.quat);
+    const pan = clamp(((snd.x - this.cs.pos.x) * right.x + (snd.z - this.cs.pos.z) * right.z) / Math.max(d, 4), -0.9, 0.9);
+    this.d.audio.animalCall(snd.voice, gain, pan);
   }
 
   private handleDriverActions() {
@@ -873,10 +910,19 @@ export class Game {
       inp.brake = 0;
     }
 
+    // livestock: they see the car coming (and hear the horn)
+    const bt = v.body.translation();
+    const bv = v.body.linvel();
+    this.carNear.pos.set(bt.x, bt.y, bt.z);
+    this.carNear.vel.set(bv.x, bv.y, bv.z);
+    this.carNear.horn = this.seats.driver && dc.horn;
+    this.animals.beforePhysicsStep(dt, this.carNear);
+
     v.preStep(inp, dt);
     this.physics!.step();
     v.postStep(dt);
     this.props.afterPhysicsStep();
+    this.animals.afterPhysicsStep(this.carNear);
 
     for (const imp of v.impacts) {
       s.reportImpact({ strength: imp.strength, dx: imp.dir.x, dy: imp.dir.y, dz: imp.dir.z, kind: imp.kind });
@@ -932,8 +978,10 @@ export class Game {
       this.cs.toSnapshot(this.carOut, this.simTime, this.seq++);
       s.sendCarState(this.d.mode === 'online' ? this.carOut : this.carOut.slice());
     }
-    if (this.d.mode === 'online' && this.steps % 6 === 0) {
-      const p = this.props.packMoving();
+    if (this.d.mode === 'online' && this.steps % 6 === 3) {
+      const bales = this.props.packMoving();
+      const herd = this.animals.packNear(this.cs.pos, MAX_PROPS_PER_MSG - (bales ? bales[0] : 0));
+      const p = mergeProps(bales, herd);
       if (p) s.sendProps(p);
     }
   }
@@ -1219,11 +1267,17 @@ export class Game {
     this.navBody.pose(this.navView.motion.offset.clone().add(new THREE.Vector3(-0.2, -0.1, -0.1).multiplyScalar(this.navView.lean)), nyaw * 0.9, npitch * 0.8);
     this.driverBody.group.visible = this.seats.driver;
     this.navBody.group.visible = this.seats.navigator;
+    // googly eyes: blink and dart about (the co-driver mostly stares at the tablet)
+    this.driverBody.face.update(dt);
+    this.navBody.face.update(dt, this.cabin?.held === 0 ? { x: 0, y: -0.7 } : undefined);
+    this.driverAvatar.face.update(dt);
+    this.navAvatar.face.update(dt);
   }
 
   private navContext(): NavContext | null {
     if (!this.cabin) return null;
     const rect = this.d.mode === 'couch' ? { x: 0.5, y: 0, w: 0.5, h: 1 } : { x: 0, y: 0, w: 1, h: 1 };
+    const here = Math.floor(this.locator.locate(this.cs.pos.x, this.cs.pos.z).idx);
     return {
       camera: this.navView.camera,
       rect,
@@ -1234,6 +1288,7 @@ export class Game {
       doorHandle: this.doorStates.right ? this.car.doors.right.handle : null,
       enabled: !this.pausedLocal && !this.pausedRemote && this.phase !== 'loading' && !this.cinematic,
       lastDirectional: this.lastDirectional,
+      animalAhead: this.animals.onRoadAhead(here - 2, here + 80),
     };
   }
 
@@ -1391,6 +1446,7 @@ export class Game {
       accelLocal: cs.accelLocal,
       doorOpen: this.doorStates.left || this.doorStates.right,
       wipers: this.windshield.wipersActive,
+      timeMs: this.phase === 'racing' || this.phase === 'finished' ? this.raceTimeMs(performance.now()) : 0,
     });
     this.doors.left.update(dt, cs.accelLocal, cs.speed, cs.rough);
     this.doors.right.update(dt, cs.accelLocal, cs.speed, cs.rough);
@@ -1436,6 +1492,14 @@ export class Game {
         this.d.ui.subtitle(note.text, 'AI CO-DRIVER', false);
         this.voice.speak(note.text, note.urgent);
       }
+      // ...and it shouts when something is standing on the road ahead
+      const beast = this.phase === 'racing' && canSee ? this.animals.onRoadAhead(Math.floor(loc.idx) + 10, Math.floor(loc.idx) + 12 + Math.max(25, this.cs.speed * 1.7)) : null;
+      if (beast && now > this.animalWarnAt) {
+        this.animalWarnAt = now + 7000;
+        const text = CALLOUT_TEXT[beast];
+        this.d.ui.subtitle(text, 'AI CO-DRIVER', false);
+        this.voice.speak(text, true);
+      }
     }
     // tablet screen at ~20 fps
     this.minimapTimer -= dt;
@@ -1454,6 +1518,7 @@ export class Game {
         checkpointsTotal: this.stage.checkpoints.length,
         wrongWay: !!st?.wrongWay,
         flash: this.flash,
+        animals: this.animals.markers(this.animalMarkers),
         banner: this.phase === 'countdown' ? 'GET READY…' : this.phase === 'finished' ? 'STAGE COMPLETE!' : null,
         now,
       });
@@ -1532,6 +1597,8 @@ export class Game {
         const edge = new THREE.Vector3(this.stage.xs[i] + Math.cos(h) * lat, q.roadY + 1, this.stage.zs[i] + Math.sin(h) * lat);
         const from = this.roles.includes('driver') && this.seats.driver ? this.driverView.camera : this.navView.camera;
         this.fallCam = new FallCamera(from, cs.pos, edge);
+        this.driverBody.face.startle(1);
+        this.navBody.face.startle(1);
         this.fallRest = 0;
         this.d.ui.toast('OVER THE EDGE!', 'bad');
       }
@@ -1736,6 +1803,7 @@ export class Game {
     this.road?.dispose();
     this.veg?.dispose();
     this.props?.dispose();
+    this.animals?.dispose();
     this.vehicle?.dispose();
     this.car?.dispose();
     this.cockpit?.dispose();
