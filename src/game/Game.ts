@@ -56,6 +56,7 @@ import { Terrain } from '../world/Terrain';
 import { TerrainField } from '../world/TerrainField';
 import { Vegetation } from '../world/Vegetation';
 import { CarRenderState } from './CarRenderState';
+import { FallCamera } from './FallCamera';
 import { CINEMATIC_SECONDS, FinishCinematic } from './FinishCinematic';
 import { EYE_HEIGHT, FootAvatar, FootController, hookWorld, type FootEnv, type FootIntent } from './OnFoot';
 import { SeatView } from './SeatView';
@@ -147,6 +148,11 @@ export class Game {
   private footEnv!: FootEnv;
   private obstacleScratch: { x: number; z: number; r: number }[] = [];
   private stuckNoticeUntil = 0;
+
+  // over the edge: third-person view of the fall
+  private fallCam: FallCamera | null = null;
+  private fallRest = 0;
+  private fallCooldown = 0;
 
   // finish
   private cinematic: FinishCinematic | null = null;
@@ -666,6 +672,7 @@ export class Game {
 
   get views(): View[] {
     if (this.cinematic) return [{ camera: this.cinematic.camera, x: 0, y: 0, w: 1, h: 1 }];
+    if (this.fallCam && this.roles.every((r) => this.seats[r])) return [{ camera: this.fallCam.camera, x: 0, y: 0, w: 1, h: 1 }];
     const view = (role: Role, x: number, w: number): View => ({ camera: this.cameraFor(role), x, y: 0, w, h: 1, ...this.speedBlur(role) });
     if (this.d.mode === 'couch') return [view('driver', 0, 0.5), view('navigator', 0.5, 0.5)];
     return [view(this.roles.includes('driver') ? 'driver' : 'navigator', 0, 1)];
@@ -759,6 +766,7 @@ export class Game {
     this.updateCockpit(dt);
     this.updateNavigation(dt, now);
     this.updateGlare(dt, now);
+    this.updateFall(dt);
     this.updateAudio(dt);
     this.particles.update(dt);
     if (this.vehicle && !frozen) this.emitDriveParticles(dt);
@@ -1492,6 +1500,49 @@ export class Game {
     } else {
       this.glareAway += dt;
       if (this.glareAway > 0.3) this.glareArmed = true;
+    }
+  }
+
+  /**
+   * Over the edge: when the car leaves the road and drops well below it, the
+   * occupants' views switch to a third-person camera that follows the fall
+   * until the car has come to rest (or is reset). Decided from the shared car
+   * state, so both players see it; purely visual.
+   */
+  private updateFall(dt: number) {
+    this.fallCooldown = Math.max(0, this.fallCooldown - dt);
+    const cs = this.cs;
+    const q = this.field.queryRoad(cs.pos.x, cs.pos.z);
+    const onRoad = q.dist < this.field.halfWidthAt(q.idx) + 1.2 && Math.abs(cs.pos.y - q.roadY) < 2.5;
+    if (!this.fallCam) {
+      if (this.phase !== 'racing' || this.cinematic || this.fallCooldown > 0 || !this.roles.some((r) => this.seats[r])) return;
+      if (onRoad || q.dist === Infinity) return;
+      const below = q.roadY - cs.pos.y;
+      if ((below > 2.5 && cs.vel.y < -3) || below > 5) {
+        // edge point: the nearest road edge, at road level
+        const lat = Math.sign(q.lateral) * this.field.halfWidthAt(q.idx);
+        const i = Math.max(0, Math.min(this.stage.count - 1, Math.round(q.idx)));
+        const h = this.stage.headings[i];
+        const edge = new THREE.Vector3(this.stage.xs[i] + Math.cos(h) * lat, q.roadY + 1, this.stage.zs[i] + Math.sin(h) * lat);
+        const from = this.roles.includes('driver') && this.seats.driver ? this.driverView.camera : this.navView.camera;
+        this.fallCam = new FallCamera(from, cs.pos, edge);
+        this.fallRest = 0;
+        this.d.ui.toast('OVER THE EDGE!', 'bad');
+      }
+      return;
+    }
+    const fc = this.fallCam;
+    const eye = (this.roles.includes('driver') && this.seats.driver ? this.driverView : this.navView).camera;
+    fc.trackStart(eye.getWorldPosition(new THREE.Vector3()), eye.getWorldQuaternion(new THREE.Quaternion()));
+    // ground for the camera: terrain, plus boulders / trees standing there
+    const ground = (x: number, z: number) => this.field.heightAt(x, z) + (this.veg.obstaclesNear(x, z, 0.6, this.obstacleScratch).length ? 3.6 : 0);
+    fc.update(dt, cs.pos, ground, (a, b) => this.lineClearance(a, b));
+    this.fallRest = cs.speed < 1.2 ? this.fallRest + dt : 0;
+    // back to the cockpit once it has settled, when it's back on the road (reset), or after a long slide
+    const done = (fc.elapsed > 2.5 && this.fallRest > 1.4) || (onRoad && fc.elapsed > 0.8) || fc.elapsed > 14 || this.cinematic || this.phase !== 'racing';
+    if (done) {
+      this.fallCam = null;
+      this.fallCooldown = 1.5;
     }
   }
 

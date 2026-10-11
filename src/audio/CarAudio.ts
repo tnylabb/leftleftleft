@@ -20,11 +20,30 @@ export interface CarAudioState {
   listenerX: number;
 }
 
+/**
+ * One crank revolution of a 4-cylinder engine as a harmonic spectrum (index =
+ * multiples of the crank frequency): the firing order (2nd) dominates, a soft
+ * half-order rumble from uneven cylinders, and harmonics that roll off fast -
+ * no raw saw / square edges, so it hums and growls instead of buzzing.
+ */
+function engineWave(ctx: AudioContext): PeriodicWave {
+  const n = 40;
+  const real = new Float32Array(n);
+  const imag = new Float32Array(n);
+  const amp: Record<number, number> = { 1: 0.32, 2: 1, 3: 0.22, 4: 0.46, 5: 0.1, 6: 0.22, 8: 0.12 };
+  for (let k = 1; k < n; k++) {
+    const a = amp[k] ?? (k % 2 === 0 ? 0.5 : 0.18) / Math.pow(k, 1.45);
+    // fixed pseudo-random phases: a pulse-like, slightly lumpy waveform
+    const ph = (k * 2.399) % (Math.PI * 2);
+    real[k] = a * Math.cos(ph);
+    imag[k] = a * Math.sin(ph);
+  }
+  return ctx.createPeriodicWave(real, imag);
+}
+
 export class CarAudio {
   private started = false;
   private oscA!: OscillatorNode;
-  private oscB!: OscillatorNode;
-  private oscC!: OscillatorNode;
   private engineFilter!: BiquadFilterNode;
   private engineGain!: GainNode;
   private intakeGain!: GainNode;
@@ -41,46 +60,61 @@ export class CarAudio {
   private hornGain!: GainNode;
   private crackleTimer = 0;
   private gravelTimer = 0;
+  /** Seconds since the throttle was lifted at high revs (lift-off pops fade out). */
+  private liftTime = 9;
+  private prevThrottle = 0;
 
   constructor(private a: AudioEngine) {}
 
   private start() {
     const a = this.a;
     const ctx = a.ctx!;
-    // engine: detuned saw stack -> waveshaper -> lowpass
-    this.engineGain = ctx.createGain();
-    this.engineGain.gain.value = 0;
-    this.engineFilter = ctx.createBiquadFilter();
-    this.engineFilter.type = 'lowpass';
-    this.engineFilter.Q.value = 2.2;
+    // engine: a combustion-like spectrum (no detuned copies: they beat into a slow "wah-wah")
+    // -> gentle saturation -> smooth (non-resonant) low-pass -> exhaust boom -> top-end cut
+    this.oscA = ctx.createOscillator();
+    this.oscA.setPeriodicWave(engineWave(ctx));
+    const gA = ctx.createGain();
+    gA.gain.value = 0.9;
     const shaper = ctx.createWaveShaper();
     const curve = new Float32Array(1024);
     for (let i = 0; i < 1024; i++) {
       const x = (i / 1023) * 2 - 1;
-      curve[i] = Math.tanh(x * 2.4);
+      curve[i] = Math.tanh(x * 1.3) / Math.tanh(1.3);
     }
     shaper.curve = curve;
-    this.oscA = ctx.createOscillator();
-    this.oscA.type = 'sawtooth';
-    this.oscB = ctx.createOscillator();
-    this.oscB.type = 'square';
-    this.oscC = ctx.createOscillator();
-    this.oscC.type = 'sawtooth';
-    const gA = ctx.createGain();
-    gA.gain.value = 0.5;
-    const gB = ctx.createGain();
-    gB.gain.value = 0.35;
-    const gC = ctx.createGain();
-    gC.gain.value = 0.18;
+    shaper.oversample = '2x';
+    // uneven combustion: slow random wobble of the level (a running engine, not a drone)
+    const rough = ctx.createGain();
+    rough.gain.value = 1;
+    const wobble = a.noiseSource();
+    const wobbleFilter = ctx.createBiquadFilter();
+    wobbleFilter.type = 'lowpass';
+    wobbleFilter.frequency.value = 22;
+    const wobbleDepth = ctx.createGain();
+    wobbleDepth.gain.value = 0.055;
+    wobble.connect(wobbleFilter).connect(wobbleDepth).connect(rough.gain);
+    wobble.start();
+    this.engineFilter = ctx.createBiquadFilter();
+    this.engineFilter.type = 'lowpass';
+    this.engineFilter.Q.value = 0.55;
+    const boom = ctx.createBiquadFilter();
+    boom.type = 'peaking';
+    boom.frequency.value = 140;
+    boom.Q.value = 0.9;
+    boom.gain.value = 5;
+    const topCut = ctx.createBiquadFilter();
+    topCut.type = 'highshelf';
+    topCut.frequency.value = 2400;
+    topCut.gain.value = -10;
+    this.engineGain = ctx.createGain();
+    this.engineGain.gain.value = 0;
     this.oscA.connect(gA).connect(shaper);
-    this.oscB.connect(gB).connect(shaper);
-    this.oscC.connect(gC).connect(shaper);
-    shaper.connect(this.engineFilter).connect(this.engineGain).connect(a.buses.engine);
+    shaper.connect(rough).connect(this.engineFilter).connect(boom).connect(topCut).connect(this.engineGain).connect(a.buses.engine);
     // intake noise
     const intake = a.noiseSource();
     this.intakeFilter = ctx.createBiquadFilter();
     this.intakeFilter.type = 'bandpass';
-    this.intakeFilter.Q.value = 1.4;
+    this.intakeFilter.Q.value = 0.8;
     this.intakeGain = ctx.createGain();
     this.intakeGain.gain.value = 0;
     intake.connect(this.intakeFilter).connect(this.intakeGain).connect(a.buses.engine);
@@ -154,7 +188,7 @@ export class CarAudio {
       o.start();
     }
 
-    for (const n of [this.oscA, this.oscB, this.oscC, this.squealOsc, vib, wm]) n.start();
+    for (const n of [this.oscA, this.squealOsc, vib, wm]) n.start();
     for (const n of [intake, road, gravel, scrub, wind]) n.start();
     this.started = true;
   }
@@ -165,17 +199,18 @@ export class CarAudio {
     const ctx = this.a.ctx!;
     const t = ctx.currentTime;
     const tc = 0.05;
-    const f = Math.max(20, s.rpm / 30);
-    this.oscA.frequency.setTargetAtTime(f, t, 0.03);
-    this.oscB.frequency.setTargetAtTime(f * 0.5, t, 0.03);
-    this.oscC.frequency.setTargetAtTime(f * 2.01, t, 0.03);
-    const load = s.shifting ? 0.1 : s.throttle;
-    this.engineFilter.frequency.setTargetAtTime(280 + load * 2200 + s.rpm * 0.18, t, tc);
-    let eg = 0.18 + load * 0.2 + (s.rpm / 7000) * 0.12;
-    if (s.limiter && Math.floor(t * 22) % 2 === 0) eg *= 0.35;
-    this.engineGain.gain.setTargetAtTime(eg, t, 0.03);
-    this.intakeFilter.frequency.setTargetAtTime(500 + s.rpm * 0.25, t, tc);
-    this.intakeGain.gain.setTargetAtTime(load * (s.rpm / 7000) * 0.22, t, tc);
+    // crank frequency (the wave's 2nd harmonic is the 4-cylinder firing frequency)
+    const crank = Math.max(10, s.rpm / 60);
+    this.oscA.frequency.setTargetAtTime(crank, t, 0.04);
+    const load = s.shifting ? 0.15 : s.throttle;
+    const rev = Math.min(1, s.rpm / 7400);
+    // brighter and louder under load, mellow when cruising or coasting
+    this.engineFilter.frequency.setTargetAtTime(380 + load * 900 + rev * 900, t, tc);
+    let eg = 0.22 + load * 0.24 + rev * 0.16;
+    if (s.limiter && Math.floor(t * 16) % 2 === 0) eg *= 0.6;
+    this.engineGain.gain.setTargetAtTime(eg, t, 0.04);
+    this.intakeFilter.frequency.setTargetAtTime(320 + s.rpm * 0.11, t, tc);
+    this.intakeGain.gain.setTargetAtTime(load * rev * 0.09, t, tc);
 
     const sp = Math.min(1, s.speed / 35);
     const grounded = s.airborne ? 0 : 1;
@@ -196,11 +231,16 @@ export class CarAudio {
       this.gravelTimer = 0.03 + Math.random() * (0.6 / (1 + s.speed * 0.15));
       this.a.burst({ bus: 'environment', duration: 0.03, gain: 0.04 + Math.random() * 0.06, freq: 3000 + Math.random() * 3000, q: 4, pan: (Math.random() - 0.5) * 1.2 });
     }
-    // overrun crackle
+    // a few soft exhaust pops right after lifting off at high revs, dying away
+    if (this.prevThrottle > 0.5 && s.throttle < 0.1 && s.rpm > 4200) this.liftTime = 0;
+    this.prevThrottle = s.throttle;
+    this.liftTime += dt;
     this.crackleTimer -= dt;
-    if (s.throttle < 0.05 && s.rpm > 3800 && this.crackleTimer <= 0) {
-      this.crackleTimer = 0.05 + Math.random() * 0.3;
-      if (Math.random() < 0.5) this.a.burst({ bus: 'engine', duration: 0.05, gain: 0.25, freq: 600 + Math.random() * 600, q: 1.5, pan: -s.listenerX * 0.2 });
+    if (this.liftTime < 1.1 && s.throttle < 0.1 && this.crackleTimer <= 0) {
+      this.crackleTimer = 0.12 + Math.random() * 0.35;
+      if (Math.random() < 0.6 - this.liftTime * 0.45) {
+        this.a.burst({ bus: 'engine', duration: 0.06, gain: 0.09, freq: 260 + Math.random() * 200, q: 1.2, type: 'lowpass', pan: -s.listenerX * 0.2 });
+      }
     }
   }
 

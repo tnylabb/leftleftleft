@@ -282,6 +282,11 @@ No key is shared between the two players:
   trees, and may come to rest on a bench or a lower bend - or slide all the way to the valley. Both players
   feel the same crash (it's the one shared car). Where it lands, the tow-hook recovery still works if the
   terrain allows; otherwise hold `R`.
+- **Over-the-edge camera**: once the car has left the road and dropped well below it, both occupants' views
+  ease out into a third-person camera that hangs above and uphill of the car and follows the tumble (it
+  never rolls with the car, stays clear of the hillside and boulders, and pulls in when trees would hide
+  the car). Back to the cockpit once the car has settled, when it's reset onto the road, or after 14 s.
+  Decided locally from the shared car state, so it's purely visual.
 - **No shortcuts**: progress, checkpoints and the finish only count on the road's level and within reach of
   where the car has legitimately driven to. A car that falls onto a lower bend gets an "off your route" hint
   and the emergency reset puts it back where it left the road (never further on).
@@ -375,7 +380,9 @@ No key is shared between the two players:
   subtitles and spoken with text-to-speech (toggleable).
 
 ### Audio (all procedural WebAudio)
-Engine (pitch from RPM, load-dependent filter, rev limiter stutter, overrun crackle), road rumble, gravel
+Engine (a custom 4-cylinder harmonic spectrum: firing order plus a soft half-order rumble, a smooth
+low-pass that opens with load and revs, an exhaust boom, the harsh top end cut, slight uneven combustion
+at idle, a soft rev limiter and a few quiet pops after lifting off at high revs), road rumble, gravel
 pings, tyre scrub/squeal, wind (louder with open doors), wipers motor + squeak, horn, impacts scaled by
 strength and panned to the hit side, suspension thumps, tablet/object clacks, door rattles/bangs/slams,
 splashes, bush rustle, UI clicks, countdown beeps, checkpoint chime, finish fanfare + crowd cheer. Independent volumes: master, engine,
