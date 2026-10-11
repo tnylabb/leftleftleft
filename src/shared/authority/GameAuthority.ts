@@ -111,6 +111,8 @@ export class GameAuthority {
   private stuckTime = 0;
   private flippedTime = 0;
   private stuckHinted = false;
+  private offRouteTime = 0;
+  private offRouteHinted = false;
 
   constructor(
     private stage: StageData,
@@ -249,7 +251,7 @@ export class GameAuthority {
     while (this.recentSpeeds.length && now - this.recentSpeeds[0].t > 1500) this.recentSpeeds.shift();
 
     if (this.phase === 'racing' && !this.paused) {
-      const events = this.tracker.update(x, z, buf[CAR.vx], buf[CAR.vz], dt, this.raceTimeMs);
+      const events = this.tracker.update(x, z, buf[CAR.vx], buf[CAR.vz], dt, this.raceTimeMs, y);
       for (const e of events) this.handleRaceEvent(e);
       this.evaluateCarContext(buf, dt, speed);
     }
@@ -367,6 +369,17 @@ export class GameAuthority {
       this.issueReset(true);
     }
 
+    // fell (or drove) onto a stretch of road the car hasn't got to yet: it doesn't count
+    if (this.tracker.offRoute) this.offRouteTime += dt;
+    else {
+      this.offRouteTime = 0;
+      this.offRouteHinted = false;
+    }
+    if (this.offRouteTime > 2 && !this.offRouteHinted) {
+      this.offRouteHinted = true;
+      this.out.hint('OFF YOUR ROUTE - THIS PART DOES NOT COUNT. HOLD R TO RESET TO WHERE YOU LEFT THE ROAD');
+    }
+
     // rough terrain can shake a door open
     const rough = buf[CAR.rough];
     if (rough > 0.65 && speed > 8 && Math.abs(loc.lateral) > ROAD_HALF_WIDTH + 1) this.roughTime += dt;
@@ -399,7 +412,8 @@ export class GameAuthority {
     }
     let i: number;
     if (this.phase === 'countdown' || !this.lastState) i = s.startIdx;
-    else i = Math.max(s.startIdx, Math.min(s.finishIdx - 2, Math.floor(this.tracker.loc.idx) - 3));
+    // never further than the car has legitimately driven (no shortcuts by falling off the mountain)
+    else i = Math.max(s.startIdx, Math.min(s.finishIdx - 2, Math.floor(Math.min(this.tracker.loc.idx, this.tracker.maxIdx)) - 3));
     // never reset onto a jump ramp
     for (const j of s.jumps) if (i > j.idx - 9 && i < j.idx + 8) i = j.idx - 10;
     const h = s.headings[i];
@@ -409,6 +423,8 @@ export class GameAuthority {
     this.stuckTime = 0;
     this.flippedTime = 0;
     this.stuckHinted = false;
+    this.offRouteTime = 0;
+    this.offRouteHinted = false;
     this.out.teleport(pose);
   }
 
@@ -574,7 +590,6 @@ export class GameAuthority {
       buf[CABIN.pullY] *= k;
       buf[CABIN.pullZ] *= k;
     }
-    buf[CABIN.mapFold] = clamp(buf[CABIN.mapFold], 0, 1);
     return buf;
   }
 

@@ -11,7 +11,9 @@ import { Noise2D, Rng, hash2 } from '../shared/rng';
 import type { StageData } from '../shared/types';
 
 const HW = ROAD_HALF_WIDTH;
-const LATERALS = [-(HW + 0.7), -HW, -HW * 0.55, -0.95, 0, 0.95, HW * 0.55, HW, HW + 0.7];
+const COLS = 9;
+/** Lateral positions of the ribbon's vertex columns for a road half width `hw`. */
+const laterals = (hw: number) => [-(hw + 0.7), -hw, -hw * 0.55, -0.95, 0, 0.95, hw * 0.55, hw, hw + 0.7];
 
 const C = {
   gravelA: new THREE.Color(0x9e8866),
@@ -48,7 +50,8 @@ export class Road {
     const s = this.stage;
     const k = s.curvature[i];
     const bank = clamp(-k * 2.4, -0.055, 0.055);
-    let y = bank * l - 0.05 * (l / HW) * (l / HW);
+    const hw = s.halfWidths[i];
+    let y = bank * l - 0.05 * (l / hw) * (l / hw);
     y += this.noise.noise(i * 0.42, l * 0.9) * 0.03 + this.noise.noise(i * 1.7 + 50, l * 2.3) * 0.012;
     for (const p of this.potholes) {
       const di = (i - p.i) * 2;
@@ -61,15 +64,16 @@ export class Road {
 
   private build() {
     const s = this.stage;
-    const cols = LATERALS.length;
+    const cols = COLS;
     const verts = new Float32Array(s.count * cols * 3);
     for (let i = 0; i < s.count; i++) {
       const h = s.headings[i];
       const rx = Math.cos(h);
       const rz = Math.sin(h);
+      const lats = laterals(s.halfWidths[i]);
       for (let c = 0; c < cols; c++) {
-        const l = LATERALS[c];
-        const outer = Math.abs(l) > HW + 0.01;
+        const l = lats[c];
+        const outer = c === 0 || c === cols - 1;
         const y = s.ys[i] + (outer ? -0.42 : this.surfaceOffset(i, l));
         const k = (i * cols + c) * 3;
         verts[k] = s.xs[i] + rx * l;
@@ -97,9 +101,11 @@ export class Road {
       const ia = indices[t], ib = indices[t + 1], ic = indices[t + 2];
       const ci = Math.floor(ia / cols);
       const cc = Math.min(ia % cols, ib % cols, ic % cols);
-      const lMid = (LATERALS[cc] + LATERALS[Math.min(cols - 1, cc + 1)]) / 2;
+      const hw = s.halfWidths[ci];
+      const lats = laterals(hw);
+      const lMid = (lats[cc] + lats[Math.min(cols - 1, cc + 1)]) / 2;
       const al = Math.abs(lMid);
-      if (al > HW) tmp.copy(C.verge);
+      if (al > hw) tmp.copy(C.verge);
       else if (al > 0.55 && al < 1.5) tmp.copy(C.track);
       else if (al < 0.5) tmp.copy(C.ridge);
       else tmp.copy(C.gravelA).lerp(C.gravelB, (this.noise.noise(ci * 0.1, lMid) + 1) / 2);
@@ -173,7 +179,8 @@ export class Road {
 
   /** Road surface height at a sample/lateral position (for placing props). */
   surfaceY(i: number, l: number): number {
-    return this.stage.ys[i] + this.surfaceOffset(i, clamp(l, -HW, HW));
+    const hw = this.stage.halfWidths[i];
+    return this.stage.ys[i] + this.surfaceOffset(i, clamp(l, -hw, hw));
   }
 
   dispose() {

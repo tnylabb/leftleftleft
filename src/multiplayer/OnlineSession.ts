@@ -5,7 +5,7 @@ import { io, type Socket } from 'socket.io-client';
 import type { StageLength } from '../shared/constants';
 import type { ClientToServerEvents, ImpactReport, JoinAck, MudReport, ServerToClientEvents } from '../shared/protocol';
 import { readFloat32, toArrayBuffer } from '../shared/snapshot';
-import type { CalloutId, DoorSide, Role, RoomSnapshot } from '../shared/types';
+import type { CalloutId, DoorSide, Role, RoomSnapshot, StageMap, StageParams } from '../shared/types';
 import { GameSession, type ConnectionStatus } from './Session';
 
 const SEAT_KEY = 'lll.seat';
@@ -134,7 +134,7 @@ export class OnlineSession extends GameSession {
     s.on('hint', (p) => this.emit('hint', p.text));
   }
 
-  private pendingLoad: { seed: number; length: StageLength; night: boolean } | null = null;
+  private pendingLoad: StageParams | null = null;
 
   /** Only start building a stage once we know which seat we're in. */
   private flushLoad() {
@@ -249,8 +249,8 @@ export class OnlineSession extends GameSession {
   setReady(ready: boolean) {
     this.socket.emit('lobby:ready', { ready });
   }
-  setStage(length: StageLength, seed?: number, night?: boolean) {
-    this.socket.emit('lobby:stage', { length, seed, night });
+  setStage(length: StageLength, seed?: number, night?: boolean, map?: StageMap) {
+    this.socket.emit('lobby:stage', { length, seed, night, map });
   }
 
   // --- gameplay ---------------------------------------------------------------

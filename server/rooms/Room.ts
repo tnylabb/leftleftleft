@@ -5,7 +5,7 @@ import { COUNTDOWN_MS, LOAD_TIMEOUT_MS, type StageLength } from '../../src/share
 import type { ClientToServerEvents, ImpactReport, MudReport, ServerToClientEvents } from '../../src/shared/protocol';
 import { toArrayBuffer } from '../../src/shared/snapshot';
 import { generateStage } from '../../src/shared/stage/StageGenerator';
-import type { CalloutId, DoorSide, PlayerInfo, Role, RoomPhase, RoomSnapshot, StageData, StageParams } from '../../src/shared/types';
+import type { CalloutId, DoorSide, PlayerInfo, Role, RoomPhase, RoomSnapshot, StageData, StageMap, StageParams } from '../../src/shared/types';
 import type { GameServer } from './RoomManager';
 
 export type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -28,7 +28,7 @@ const randomSeed = () => (Math.random() * 0xffffffff) >>> 0;
 export class Room {
   readonly players: PlayerSlot[] = [];
   phase: RoomPhase = 'lobby';
-  stage: StageParams = { seed: randomSeed(), length: 'medium', night: false };
+  stage: StageParams = { seed: randomSeed(), length: 'medium', night: false, map: 'countryside' };
   private stageData: StageData | null = null;
   private authority: GameAuthority | null = null;
   private countdownEndsAt: number | null = null;
@@ -166,12 +166,13 @@ export class Room {
     }
   }
 
-  setStage(slot: PlayerSlot, length: StageLength, seed?: number, night?: boolean) {
+  setStage(slot: PlayerSlot, length: StageLength, seed?: number, night?: boolean, map?: StageMap) {
     if (this.phase !== 'lobby' || !slot.isHost) return;
     this.stage = {
       length,
       seed: typeof seed === 'number' && Number.isFinite(seed) ? seed >>> 0 : randomSeed(),
       night: typeof night === 'boolean' ? night : this.stage.night,
+      map: map ?? this.stage.map,
     };
     for (const p of this.players) p.ready = false;
     this.broadcastState();

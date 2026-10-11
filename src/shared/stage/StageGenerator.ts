@@ -3,10 +3,10 @@
 
 import { ROAD_HALF_WIDTH, ROAD_SAMPLE_SPACING, STAGE_LENGTHS } from '../constants';
 import { clamp, wrapAngle } from '../math';
-import { Rng, hash2 } from '../rng';
+import { Noise2D, Rng, hash2 } from '../rng';
 import type { Checkpoint, HayBale, Jump, Puddle, StageData, StageParams } from '../types';
 import { analyseCorners } from './pacenotes';
-import { createTerrainBase } from './terrainBase';
+import { createTerrainBase, type HeightFn } from './terrainBase';
 
 type SegmentKind = 'straight' | 'keep' | 'easy' | 'medium' | 'hard' | 'hairpin' | 'chicane';
 
@@ -30,6 +30,8 @@ const CORNER_PARAMS: Record<Exclude<SegmentKind, 'straight' | 'chicane'>, { r: [
 
 const DEG = Math.PI / 180;
 const MIN_SEPARATION = 27; // metres between non-adjacent parts of the road
+/** Switchback legs on the mountain sit closer together: the slope separates them vertically too. */
+const MOUNTAIN_SEPARATION = 18;
 const SEPARATION_EXCLUDE = 82; // arc length that is never checked against itself
 const CELL = 30;
 
@@ -41,7 +43,7 @@ class PathBuilder {
   ks: number[] = [0];
   private grid = new Map<number, number[]>();
 
-  constructor() {
+  constructor(private minSeparation = MIN_SEPARATION) {
     this.addToGrid(0);
   }
 
@@ -63,7 +65,7 @@ class PathBuilder {
   private tooClose(x: number, z: number, maxIndex: number): boolean {
     const cx = Math.floor(x / CELL);
     const cz = Math.floor(z / CELL);
-    const r2 = MIN_SEPARATION * MIN_SEPARATION;
+    const r2 = this.minSeparation * this.minSeparation;
     for (let gx = cx - 1; gx <= cx + 1; gx++) {
       for (let gz = cz - 1; gz <= cz + 1; gz++) {
         const list = this.grid.get((gx + 4096) * 8192 + (gz + 4096));
@@ -208,6 +210,92 @@ function buildPath(seed: number, target: number): PathBuilder {
   return path;
 }
 
+/**
+ * Mountain road: traced along the contours of the mountainside with a slight
+ * downhill bias, so it winds in and out of the gullies and around the spurs
+ * (blind corners), and switches back with tight downhill hairpins. The
+ * self-intersection check keeps every leg clear of the one above.
+ */
+function buildMountainPath(seed: number, target: number, M: HeightFn): PathBuilder | null {
+  const grad = (x: number, z: number) => {
+    const e = 7; // wide enough to follow spurs and gullies, not every rocky lump
+    return { gx: (M(x + e, z) - M(x - e, z)) / (2 * e), gz: (M(x, z + e) - M(x, z - e)) / (2 * e) };
+  };
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const rng = new Rng(hash2(seed, 900 + attempt));
+    const path = new PathBuilder(MOUNTAIN_SEPARATION);
+    if (!path.tryAppend(straightProfile(40))) continue;
+    let failed = false;
+    while (path.length < target - 140 && !failed) {
+      // one leg across the mountainside
+      const legLen = rng.range(170, 400);
+      const grade = rng.chance(0.25) ? rng.range(0.09, 0.115) : rng.range(0.045, 0.08);
+      const wander = rng.range(0, Math.PI * 2);
+      let traced = 0;
+      let bias = 0;
+      while (traced < legLen && path.length < target - 140) {
+        let ok = false;
+        for (let tries = 0; tries < 4 && !ok; tries++) {
+          const n0 = path.xs.length - 1;
+          let x = path.xs[n0];
+          let z = path.zs[n0];
+          let h = path.hs[n0];
+          const profile: number[] = [];
+          for (let m = 0; m < 10; m++) {
+            const { gx, gz } = grad(x, z);
+            const g = Math.hypot(gx, gz) || 1e-6;
+            // contour direction closest to where we're heading, tipped downhill
+            let cx = -gz / g;
+            let cz = gx / g;
+            const dx = Math.sin(h);
+            const dz = -Math.cos(h);
+            if (cx * dx + cz * dz < 0) {
+              cx = -cx;
+              cz = -cz;
+            }
+            const a = Math.min(0.6, Math.asin(Math.min(0.95, grade / g)) + bias);
+            const wx = cx * Math.cos(a) - (gx / g) * Math.sin(a);
+            const wz = cz * Math.cos(a) - (gz / g) * Math.sin(a);
+            const desired = Math.atan2(wx, -wz) + 0.12 * Math.sin((traced + m) / 41 + wander);
+            const err = wrapAngle(desired - h);
+            const k = clamp(err * 0.2, -1 / 15, 1 / 15);
+            profile.push(k);
+            const hm = h + k * 0.5;
+            x += Math.sin(hm);
+            z -= Math.cos(hm);
+            h += k;
+          }
+          ok = path.tryAppend(profile);
+          if (!ok) bias += 0.12; // too close to the leg above: drop away a little faster
+        }
+        if (!ok) break; // end the leg early: hairpin now
+        traced += 10;
+        bias = Math.max(0, bias - 0.02);
+      }
+      if (path.length >= target - 140) break;
+      // switchback: turn towards the valley
+      const n0 = path.xs.length - 1;
+      const { gx, gz } = grad(path.xs[n0], path.zs[n0]);
+      const hd = path.hs[n0];
+      const dir = Math.cos(hd) * -gx + Math.sin(hd) * -gz > 0 ? 1 : -1;
+      let ok = false;
+      for (const r of [rng.range(9.5, 11.5), 12.5, 14]) {
+        const profile = [...cornerProfile(r, rng.range(168, 186) * DEG, dir), ...straightProfile(rng.range(10, 18))];
+        if (path.tryAppend(profile)) {
+          ok = true;
+          break;
+        }
+      }
+      if (!ok) failed = true;
+    }
+    if (failed || path.length < target * 0.72) continue;
+    // closing straight: approach to the finish line plus a run-off to roll to a stop
+    if (!path.tryAppend(straightProfile(120)) && !path.tryAppend(straightProfile(70))) path.tryAppend(straightProfile(30));
+    return path;
+  }
+  return null;
+}
+
 function boxSmooth(src: Float64Array<ArrayBuffer>, radius: number, passes: number): Float64Array<ArrayBuffer> {
   let a = src;
   const n = a.length;
@@ -230,7 +318,9 @@ function boxSmooth(src: Float64Array<ArrayBuffer>, radius: number, passes: numbe
 export function generateStage(params: StageParams): StageData {
   const seed = params.seed >>> 0;
   const target = STAGE_LENGTHS[params.length] ?? STAGE_LENGTHS.medium;
-  const path = buildPath(seed, target);
+  const mountain = params.map === 'mountain';
+  const base = createTerrainBase({ seed, length: params.length, map: mountain ? 'mountain' : 'countryside' });
+  const path = (mountain && buildMountainPath(seed, target, base)) || buildPath(seed, target);
   const rng = new Rng(hash2(seed, 0xbeef));
 
   // --- resample to ROAD_SAMPLE_SPACING ---------------------------------------
@@ -256,11 +346,11 @@ export function generateStage(params: StageParams): StageData {
   }
 
   // --- elevation ---------------------------------------------------------------
-  const base = createTerrainBase(seed);
   let ys = new Float64Array(count);
   for (let i = 0; i < count; i++) ys[i] = base(xs[i], zs[i]);
-  ys = boxSmooth(ys, 12, 2);
-  const maxStep = 0.11 * step;
+  ys = boxSmooth(ys, mountain ? 10 : 12, 2);
+  // mountain roads may be steeper (descents up to ~13 %)
+  const maxStep = (mountain ? 0.13 : 0.11) * step;
   for (let i = 1; i < count; i++) ys[i] = clamp(ys[i], ys[i - 1] - maxStep, ys[i - 1] + maxStep);
   for (let i = count - 2; i >= 0; i--) ys[i] = clamp(ys[i], ys[i + 1] - maxStep, ys[i + 1] + maxStep);
   ys = boxSmooth(ys, 4, 1);
@@ -295,7 +385,8 @@ export function generateStage(params: StageParams): StageData {
 
   // --- jumps ---------------------------------------------------------------------
   const jumps: Jump[] = [];
-  const wantJumps = params.length === 'short' ? 2 : params.length === 'medium' ? 3 : 4;
+  // no ramps on the mountain: the crests and drops do that job
+  const wantJumps = mountain ? 0 : params.length === 'short' ? 2 : params.length === 'medium' ? 3 : 4;
   const candidates: number[] = [];
   for (let i = 80; i < finishIdx - 60; i++) {
     let straight = true;
@@ -329,6 +420,7 @@ export function generateStage(params: StageParams): StageData {
   // --- blind crests: a hump just before some tight corners hides the turn ---------
   // The driver crests the rise and only then sees the road bend away.
   for (const c of corners) {
+    if (mountain) break; // mountain corners are blind because of the rock and terrain instead
     const p = c.severity === 'hard' || c.severity === 'hairpin' ? 0.45 : c.severity === 'medium' ? 0.25 : 0;
     if (!rng.chance(p)) continue;
     const centre = c.entryIdx - rng.int(10, 16);
@@ -341,7 +433,7 @@ export function generateStage(params: StageParams): StageData {
 
   // --- puddles ---------------------------------------------------------------
   const puddles: Puddle[] = [];
-  const wantPuddles = params.length === 'short' ? 3 : params.length === 'medium' ? 5 : 8;
+  const wantPuddles = mountain ? (params.length === 'long' ? 3 : 2) : params.length === 'short' ? 3 : params.length === 'medium' ? 5 : 8;
   for (let tries = 0; tries < 80 && puddles.length < wantPuddles; tries++) {
     const i = rng.int(40, finishIdx - 20);
     if (nearCheckpoint(i, 8) || jumps.some((j) => Math.abs(j.idx - i) < 14)) continue;
@@ -360,7 +452,7 @@ export function generateStage(params: StageParams): StageData {
   // --- hay bales on the outside of tight corners ----------------------------------
   const bales: HayBale[] = [];
   for (const c of corners) {
-    if (bales.length >= 44) break;
+    if (mountain || bales.length >= 44) break; // nothing to stop them rolling down the mountain
     if (!(c.severity === 'hard' || c.severity === 'hairpin' || (c.severity === 'medium' && rng.chance(0.35)))) continue;
     const n = c.severity === 'hairpin' ? 4 : rng.int(2, 3);
     for (let b = 0; b < n; b++) {
@@ -375,6 +467,35 @@ export function generateStage(params: StageParams): StageData {
         heading: h + rng.range(-0.3, 0.3),
       });
     }
+  }
+
+  // --- road width and exposure (mountain) ------------------------------------------
+  const halfWidths = new Float64Array(count).fill(ROAD_HALF_WIDTH);
+  const exposure = new Float64Array(count);
+  if (mountain) {
+    const wn = new Noise2D(hash2(seed, 4242));
+    const nearHairpin = (i: number) => corners.some((c) => c.severity === 'hairpin' && i >= c.entryIdx - 8 && i <= c.exitIdx + 8);
+    for (let i = 0; i < count; i++) {
+      // exposed stretches (sheer drop at the edge) alternate with safer, wider verges
+      let e = clamp(0.55 + 0.9 * wn.noise(i / 46 + 3.3, 0.7), 0, 1);
+      // narrow ledges where it is most exposed
+      let w = ROAD_HALF_WIDTH * (1 - 0.2 * clamp((wn.noise(i / 63 - 8.1, 5.2) - 0.15) * 2.5, 0, 1));
+      if (e < 0.25) w = Math.max(w, ROAD_HALF_WIDTH * 1.12); // a wider recovery area
+      if (nearHairpin(i)) {
+        w = ROAD_HALF_WIDTH * 1.2;
+        e = Math.min(e, 0.45);
+      }
+      if (i < startIdx + 25 || i > finishIdx - 10 || nearCheckpoint(i, 10)) {
+        w = Math.max(w, ROAD_HALF_WIDTH);
+        e = Math.min(e, 0.3);
+      }
+      halfWidths[i] = w;
+      exposure[i] = e;
+    }
+    const hw = boxSmooth(halfWidths, 6, 2);
+    const ex = boxSmooth(exposure, 4, 1);
+    halfWidths.set(hw);
+    exposure.set(ex);
   }
 
   // --- bounds & hash -------------------------------------------------------------
@@ -393,9 +514,10 @@ export function generateStage(params: StageParams): StageData {
   }
   hash = hash2(hash, corners.length * 1000 + jumps.length * 100 + puddles.length * 10 + checkpoints.length);
   hash = hash2(hash, params.night ? 0x4e1 : 0xda7);
+  hash = hash2(hash, mountain ? 0x3170 : 0xc0);
 
   return {
-    params: { seed, length: params.length, night: !!params.night },
+    params: { seed, length: params.length, night: !!params.night, map: mountain ? 'mountain' : 'countryside' },
     xs,
     ys,
     zs,
@@ -410,6 +532,8 @@ export function generateStage(params: StageParams): StageData {
     puddles,
     bales,
     checkpoints,
+    halfWidths,
+    exposure,
     bounds: { minX, maxX, minZ, maxZ },
     hash,
   };

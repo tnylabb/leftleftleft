@@ -28,8 +28,16 @@ export const CAR_SPEC = {
   antiRollRear: 7000,
   maxSteerLow: 0.6,
   maxSteerHigh: 0.12,
-  steerSpeedIn: 1.9,
-  steerSpeedOut: 3.4,
+  steerSpeedIn: 2.5,
+  steerSpeedOut: 4.0,
+  /** Extra steering lock: +steerBoostTop at top speed, +steerBoostLow more at a standstill. */
+  steerBoostLow: 0.2,
+  steerBoostTop: 0.08,
+  /** Distance between the axles (m), for the turn-in assist. */
+  wheelbase: 2.32,
+  /** Turn-in assist: yaw torque per rad/s of missing yaw rate, and its cap (N*m). */
+  turnAssist: 3200,
+  turnAssistMax: 2400,
   brakeFront: 3700,
   brakeRear: 2400,
   dragQuadratic: 0.82,

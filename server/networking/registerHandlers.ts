@@ -10,6 +10,7 @@ import {
   isRole,
   isSmallJson,
   isStageLength,
+  isStageMap,
   normalizeCode,
   sanitizeName,
 } from '../validation/payloads';
@@ -97,7 +98,13 @@ export function registerHandlers(io: GameServer, rooms: RoomManager) {
     socket.on('lobby:stage', (payload) => {
       const c = ctx();
       if (!c || !isObject(payload) || !isStageLength(payload.length)) return;
-      c.room.setStage(c.slot, payload.length, finite(payload.seed) ? payload.seed : undefined, typeof payload.night === 'boolean' ? payload.night : undefined);
+      c.room.setStage(
+        c.slot,
+        payload.length,
+        finite(payload.seed) ? payload.seed : undefined,
+        typeof payload.night === 'boolean' ? payload.night : undefined,
+        isStageMap(payload.map) ? payload.map : undefined,
+      );
     });
 
     socket.on('game:loaded', (payload) => {

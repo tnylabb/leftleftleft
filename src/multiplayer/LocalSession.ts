@@ -5,7 +5,7 @@ import { GameAuthority } from '../shared/authority/GameAuthority';
 import { COUNTDOWN_MS, type StageLength } from '../shared/constants';
 import type { ImpactReport, MudReport } from '../shared/protocol';
 import { generateStage } from '../shared/stage/StageGenerator';
-import type { CalloutId, DoorSide, Role, StageParams } from '../shared/types';
+import type { CalloutId, DoorSide, Role, StageMap, StageParams } from '../shared/types';
 import { GameSession } from './Session';
 
 export class LocalSession extends GameSession {
@@ -19,10 +19,11 @@ export class LocalSession extends GameSession {
     readonly localRoles: Role[],
     length: StageLength,
     night: boolean,
+    map: StageMap,
     seed?: number,
   ) {
     super();
-    this.params = { seed: seed ?? ((Math.random() * 0xffffffff) >>> 0), length, night };
+    this.params = { seed: seed ?? ((Math.random() * 0xffffffff) >>> 0), length, night, map };
   }
 
   get stageParams(): StageParams {

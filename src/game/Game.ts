@@ -7,7 +7,7 @@ import { CarAudio } from '../audio/CarAudio';
 import type { AudioEngine } from '../audio/AudioEngine';
 import { Cockpit } from '../cockpit/Cockpit';
 import { DoorSim } from '../cockpit/Doors';
-import { Flashlight } from '../cockpit/Flashlight';
+import { Headlamp } from '../cockpit/Headlamp';
 import { LAYOUT } from '../cockpit/layout';
 import { Occupant } from '../cockpit/Occupant';
 import { Windshield } from '../cockpit/Windshield';
@@ -44,8 +44,7 @@ import { CABIN, CABIN_FLAG, CAR, CAR_FLAG, cabinPoseOffset } from '../shared/sna
 import { computeInstruction, spokenNote, type NavInstruction } from '../shared/stage/pacenotes';
 import { generateStage, stageStartPose } from '../shared/stage/StageGenerator';
 import type { CalloutMsg, DoorSide, ImpactFx, RaceEvent, RaceResults, RaceStats, Role, SeatStates, StageData, StageParams } from '../shared/types';
-import { CABIN_OBJECT_NAMES, FLASHLIGHT_HOLDER, MAP_SPEC } from '../tablet/cabinObjects';
-import { PaperMap } from '../tablet/PaperMap';
+import { CABIN_OBJECT_NAMES } from '../tablet/cabinObjects';
 import { TabletModel, buildLooseObjectMeshes } from '../tablet/TabletModel';
 import { controlRows, type ControlsState } from '../ui/controlsHelp';
 import type { HudData, UI } from '../ui/UI';
@@ -107,8 +106,9 @@ export class Game {
   private driverBody!: Occupant;
   private navBody!: Occupant;
   private tablet!: TabletModel;
-  private flashlight!: Flashlight;
-  private paperMap!: PaperMap;
+  private headlamp!: Headlamp;
+  /** The car's opaque bodywork (not the glass): blocks the head lamp from outside. */
+  private bodywork: THREE.Object3D[] = [];
   private loose: THREE.Mesh[] = [];
   /** Render objects for cabin bodies, index-aligned with CabinPhysics.bodies. */
   private bodyObjects: THREE.Object3D[] = [];
@@ -152,15 +152,16 @@ export class Game {
   private cinematic: FinishCinematic | null = null;
   private finishStarted = false;
 
-  // flashlight / glare / map
-  private torchOn = false;
+  // head lamp / glare
+  private lampOn = false;
   private glare = 0;
   private glareArmed = true;
   private glareAway = 0;
   private lastGlareAt = -1e9;
   private glareRay = new THREE.Raycaster();
   private tabletLit = true;
-  private aiTorchTaken = false;
+  private aiLampOn = false;
+  private aiGlance = 0;
 
   private countdownEndsAt = 0;
   private stats: RaceStats | null = null;
@@ -204,8 +205,6 @@ export class Game {
   private wipeRay = new THREE.Raycaster();
   private holdPos = new THREE.Vector3();
   private holdQuat = new THREE.Quaternion();
-  private torchPos = new THREE.Vector3();
-  private torchQuat = new THREE.Quaternion();
   private lastCountdown: string | null = null;
 
   constructor(deps: GameDeps) {
@@ -230,10 +229,9 @@ export class Game {
   /** Whether the local player currently looks around with a captured mouse. */
   get wantsPointerLock(): boolean {
     if (this.phase === 'finished' || this.cinematic) return false;
-    if (this.d.mode === 'couch') return this.roles.includes('navigator') && !this.seats.navigator;
-    const role = this.roles[0];
-    if (role === 'driver') return true;
-    return role === 'navigator' && !this.seats.navigator;
+    // split screen: the mouse belongs to the navigator; otherwise both roles look with it
+    if (this.d.mode === 'couch') return this.roles.includes('navigator');
+    return this.roles.length > 0;
   }
 
   // ===================================================================== load ==
@@ -245,7 +243,7 @@ export class Game {
     this.night = this.stage.params.night;
     this.locator = new RoadLocator(this.stage);
     d.renderer.applyQuality(quality);
-    this.sky = new Sky(this.scene, d.renderer.shadowMapSize, this.night);
+    this.sky = new Sky(this.scene, d.renderer.shadowMapSize, this.night, this.stage.params.map === 'mountain');
     if (this.simulateCar) this.physics = new PhysicsWorld();
 
     await progress(0.08, 'Shaping hills and ditches…');
@@ -269,6 +267,7 @@ export class Game {
     this.wireSession();
     await progress(0.95, 'Warming up shaders…');
     this.applyPose();
+    this.d.renderer.lightAllLayers(this.scene);
     this.d.renderer.renderer.compile(this.scene, this.primaryCamera);
     await progress(1, 'Waiting for your co-driver…');
     return this.stage.hash;
@@ -278,6 +277,10 @@ export class Game {
     const d = this.d;
     this.car = new CarModel();
     this.car.setHeadlights(this.night);
+    this.car.root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.isMesh && !(m.material as THREE.Material).transparent) this.bodywork.push(m);
+    });
     this.scene.add(this.car.root);
     this.cockpit = new Cockpit();
     this.car.root.add(this.cockpit.group);
@@ -292,11 +295,9 @@ export class Game {
     this.car.root.add(this.tablet.group);
     this.loose = buildLooseObjectMeshes();
     for (const m of this.loose) this.car.root.add(m);
-    this.flashlight = new Flashlight(this.night);
-    this.car.root.add(this.flashlight.group, this.flashlight.holder);
-    this.paperMap = new PaperMap(this.stage);
-    this.car.root.add(this.paperMap.group);
-    this.bodyObjects = [this.tablet.group, ...this.loose, this.flashlight.group, this.paperMap.group];
+    this.headlamp = new Headlamp(this.night);
+    this.scene.add(this.headlamp.group);
+    this.bodyObjects = [this.tablet.group, ...this.loose];
     for (let i = 0; i < CABIN_BODY_COUNT; i++) this.lastCabinPose.push({ pos: new THREE.Vector3(), prev: new THREE.Vector3() });
 
     const pan = (side: DoorSide) => (side === 'left' ? -1 : 1) * this.listenerSide() * -0.8 + (side === 'left' ? -0.4 : 0.4);
@@ -368,11 +369,6 @@ export class Game {
       this.cabinSample[CABIN.tablet + 6] = 1;
       this.cabinSample[CABIN.heldObject] = -1;
       this.cabinSample[CABIN.footGrip] = -1;
-      this.cabinSample[CABIN.flags] = CABIN_FLAG.flashlightStowed | CABIN_FLAG.mapStowed;
-      const fo = cabinPoseOffset(CABIN_BODY.flashlight);
-      const hp = FLASHLIGHT_HOLDER.pos;
-      const hq = FLASHLIGHT_HOLDER.quat;
-      this.cabinSample.set([hp.x, hp.y, hp.z, hq.x, hq.y, hq.z, hq.w], fo);
     }
     if (d.mode === 'solo') this.ai = new AICoDriver(this.stage);
   }
@@ -569,8 +565,7 @@ export class Game {
       this.d.session.reportTabletDrop();
       this.d.ui.toast(reason === 'impact' ? 'TABLET KNOCKED AWAY!' : reason === 'gforce' ? 'TABLET SLIPPED!' : 'LOST GRIP!', 'bad');
       if (this.d.mode === 'solo') this.aiRegrab = 2.2 + Math.random() * 1.5;
-    } else if (index === CABIN_BODY.map) this.d.ui.toast('MAP SLIPPED!', 'bad');
-    else if (index === CABIN_BODY.flashlight) this.d.ui.toast('DROPPED THE FLASHLIGHT!', 'bad');
+    }
   }
 
   // ==================================================================== seats ==
@@ -671,13 +666,27 @@ export class Game {
 
   get views(): View[] {
     if (this.cinematic) return [{ camera: this.cinematic.camera, x: 0, y: 0, w: 1, h: 1 }];
-    if (this.d.mode === 'couch') {
-      return [
-        { camera: this.cameraFor('driver'), x: 0, y: 0, w: 0.5, h: 1 },
-        { camera: this.cameraFor('navigator'), x: 0.5, y: 0, w: 0.5, h: 1 },
-      ];
-    }
-    return [{ camera: this.primaryCamera, x: 0, y: 0, w: 1, h: 1 }];
+    const view = (role: Role, x: number, w: number): View => ({ camera: this.cameraFor(role), x, y: 0, w, h: 1, ...this.speedBlur(role) });
+    if (this.d.mode === 'couch') return [view('driver', 0, 0.5), view('navigator', 0.5, 0.5)];
+    return [view(this.roles.includes('driver') ? 'driver' : 'navigator', 0, 1)];
+  }
+
+  /**
+   * Local, purely visual speed blur for an occupant's seat view: none below
+   * ~55 km/h, growing smoothly to full strength at ~165 km/h, centred on the
+   * direction the car is actually moving in.
+   */
+  private speedBlur(role: Role): { blur: number; blurCenter?: { x: number; y: number } } {
+    if (!this.seats[role] || this.phase === 'loading') return { blur: 0 };
+    const k = clamp((this.cs.speed * 3.6 - 55) / 110, 0, 1);
+    const blur = k * k * (3 - 2 * k) * 0.9;
+    if (blur <= 0.01) return { blur: 0 };
+    const cam = role === 'driver' ? this.driverView.camera : this.navView.camera;
+    cam.updateMatrixWorld();
+    const ahead = cam.getWorldPosition(new THREE.Vector3()).addScaledVector(this.cs.vel.clone().normalize(), 60).project(cam);
+    // looking well away from the direction of travel: blur fades instead of swirling around
+    if (ahead.z > 1 || Math.abs(ahead.x) > 2.5 || Math.abs(ahead.y) > 2.5) return { blur: blur * 0.35 };
+    return { blur, blurCenter: { x: clamp(ahead.x * 0.5 + 0.5, -0.5, 1.5), y: clamp(ahead.y * 0.5 + 0.5, -0.5, 1.5) } };
   }
 
   get hudViews(): { role: Role; rect: { x: number; y: number; w: number; h: number } }[] {
@@ -741,9 +750,10 @@ export class Game {
     }
 
     this.applyPose();
-    this.updateCabinVisuals(alpha, dt);
+    this.updateCabinVisuals(alpha);
     this.updateFoot(dt, !frozen && !this.cinematic);
     this.updateViews(dt);
+    this.updateHeadlamp();
     this.updateNavigator(dt);
     this.updateArms(dt);
     this.updateCockpit(dt);
@@ -938,18 +948,16 @@ export class Game {
     _g.set(0, -9.81, 0).applyQuaternion(_q).sub(this.cs.accelLocal);
     const nc = this.navControls;
     if (nc && this.seats.navigator) {
-      // a hand is busy (flashlight, pointing, door) -> the main object is held one-handed
-      cabin.oneHanded = cabin.torchHeld || nc.pointing || this.closingDoorTimer.right > 0;
-      cabin.awkwardness = cabin.held === CABIN_BODY.map && cabin.mapOpen ? 1 + Math.min(1.6, this.cs.speed / 18) : 1;
+      // the right hand is busy (pointing, door) -> the object is held one-handed
+      cabin.oneHanded = nc.pointing || this.closingDoorTimer.right > 0;
       if (cabin.held >= 0) cabin.setHoldTarget(this.holdPos, this.holdQuat);
-      if (cabin.torchHeld) cabin.setTorchTarget(this.torchPos, this.torchQuat);
     } else if (this.d.mode === 'solo') this.aiCabin(dt);
     cabin.step(dt, _g);
     if (this.d.mode === 'online' && nc && this.steps % 3 === 0) this.sendCabin();
     if (!this.vehicle) this.steps++;
   }
 
-  /** The AI passenger holds the tablet (and at night lights it with the flashlight). */
+  /** The AI passenger holds the tablet (and at night switches its head lamp on). */
   private aiCabin(dt: number) {
     const cabin = this.cabin!;
     this.aiRegrab -= dt;
@@ -959,33 +967,24 @@ export class Game {
         this.d.session.setTabletHeld(true);
       } else this.aiRegrab = 1;
     }
-    if (this.night && !this.aiTorchTaken && this.phase !== 'loading') {
-      this.aiTorchTaken = cabin.grab(CABIN_BODY.flashlight);
-      if (this.aiTorchTaken) this.setTorch(true);
+    if (this.night && !this.aiLampOn && this.phase !== 'loading') {
+      this.aiLampOn = true;
+      this.setLamp(true);
     }
-    // the AI is a seasoned co-driver: torch in one hand doesn't loosen its grip on the tablet
     cabin.oneHanded = false;
-    const pos = _v.set(cabin.torchHeld ? 0.27 : 0.32, 0.36, -0.12);
+    const pos = _v.set(0.32, 0.36, -0.12);
     const look = _v2.copy(LAYOUT.navEye).sub(pos).normalize();
     const up = new THREE.Vector3(0, 1, 0);
     const x = new THREE.Vector3().crossVectors(up.clone().addScaledVector(look, -look.y).normalize(), look).normalize();
     const u = new THREE.Vector3().crossVectors(look, x).normalize();
     const m = new THREE.Matrix4().makeBasis(x, look, u.negate());
     cabin.setHoldTarget(pos, _q.setFromRotationMatrix(m));
-    if (cabin.torchHeld) {
-      // light the tablet while holding it; otherwise keep the beam low in the passenger footwell
-      const tp = new THREE.Vector3(0.52, 0.42, 0.0);
-      const target = cabin.held === CABIN_BODY.tablet ? cabin.currPos[CABIN_BODY.tablet] : new THREE.Vector3(0.45, -0.15, -0.55);
-      const aim = target.clone().sub(tp).normalize();
-      const tq = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), aim, up));
-      cabin.setTorchTarget(tp, tq);
-    }
   }
 
-  private setTorch(on: boolean) {
-    this.torchOn = on;
-    this.flashlight.setOn(on);
-    this.carAudio.clack(0.25, 0.5 * this.listenerSide());
+  private setLamp(on: boolean) {
+    this.lampOn = on;
+    this.headlamp.setOn(on);
+    this.carAudio.clack(0.2, 0.5 * this.listenerSide());
   }
 
   private sendCabin() {
@@ -999,11 +998,7 @@ export class Game {
     if (this.closingDoorTimer.right > 0) flags |= CABIN_FLAG.closingDoor;
     if (!this.seats.navigator) flags |= CABIN_FLAG.navOut;
     if (nc.pointing && this.seats.navigator) flags |= CABIN_FLAG.pointing;
-    if (this.torchOn) flags |= CABIN_FLAG.flashlightOn;
-    if (cabin.torchHeld) flags |= CABIN_FLAG.flashlightHeld;
-    if (cabin.flashlightStowed) flags |= CABIN_FLAG.flashlightStowed;
-    if (cabin.mapStowed) flags |= CABIN_FLAG.mapStowed;
-    if (cabin.held === CABIN_BODY.map) flags |= CABIN_FLAG.mapHeld;
+    if (this.lampOn) flags |= CABIN_FLAG.headlampOn;
     b[CABIN.flags] = flags;
     b[CABIN.headYaw] = nc.lookYaw;
     b[CABIN.headPitch] = nc.lookPitch;
@@ -1035,7 +1030,6 @@ export class Game {
     b[CABIN.pullX] = f.pull.x;
     b[CABIN.pullY] = f.pull.y;
     b[CABIN.pullZ] = f.pull.z;
-    b[CABIN.mapFold] = this.paperMap.fold;
     b[CABIN.footWalk] = f.walkPhase;
     this.d.session.sendCabinState(b);
   }
@@ -1044,14 +1038,11 @@ export class Game {
     return ((this.cabinSample[CABIN.flags] | 0) & flag) !== 0;
   }
 
-  private updateCabinVisuals(alpha: number, dt: number) {
+  private updateCabinVisuals(alpha: number) {
     const objs = this.bodyObjects;
     if (this.cabin) {
       const c = this.cabin;
       for (let i = 0; i < objs.length; i++) c.interpolate(i, alpha, objs[i].position, objs[i].quaternion);
-      this.paperMap.setOpen(c.mapOpen);
-      this.paperMap.update(dt);
-      this.paperMap.group.visible = !c.mapStowed;
       return;
     }
     if (this.cabinBuf && this.cabinBuf.sample(performance.now() / 1000, this.cabinSample)) {
@@ -1062,10 +1053,10 @@ export class Game {
       this.remoteReach.set(b[CABIN.reachX], b[CABIN.reachY], b[CABIN.reachZ]);
       this.remoteHeldObj = Math.round(b[CABIN.heldObject]);
       if (this.remoteFlag(CABIN_FLAG.closingDoor)) this.closingDoorTimer.right = Math.max(this.closingDoorTimer.right, 0.1);
-      const on = this.remoteFlag(CABIN_FLAG.flashlightOn);
-      if (on !== this.torchOn) {
-        this.torchOn = on;
-        this.flashlight.setOn(on);
+      const on = this.remoteFlag(CABIN_FLAG.headlampOn);
+      if (on !== this.lampOn) {
+        this.lampOn = on;
+        this.headlamp.setOn(on);
       }
     }
     const b = this.cabinSample;
@@ -1081,8 +1072,27 @@ export class Game {
       lp.prev.copy(lp.pos);
       lp.pos.copy(objs[i].position);
     }
-    this.paperMap.setFold(b[CABIN.mapFold]);
-    this.paperMap.group.visible = !this.remoteFlag(CABIN_FLAG.mapStowed);
+  }
+
+  /** The head lamp sits on the navigator's head: seat camera, on-foot camera or the synced avatar look. */
+  private updateHeadlamp() {
+    const eye = new THREE.Vector3();
+    const q = new THREE.Quaternion();
+    if (this.seats.navigator) {
+      const cam = this.navView.camera;
+      cam.updateMatrixWorld(true);
+      cam.getWorldPosition(eye);
+      cam.getWorldQuaternion(q);
+    } else if (this.roles.includes('navigator')) {
+      this.footCamNav.updateMatrixWorld(true);
+      this.footCamNav.getWorldPosition(eye);
+      this.footCamNav.getWorldQuaternion(q);
+    } else {
+      const b = this.cabinSample;
+      eye.set(b[CABIN.footX], b[CABIN.footY] + EYE_HEIGHT, b[CABIN.footZ]);
+      q.setFromEuler(new THREE.Euler(b[CABIN.footPitch], b[CABIN.footYaw], 0, 'YXZ'));
+    }
+    this.headlamp.setPose(eye, q);
   }
 
   // ------------------------------------------------------------------- foot --
@@ -1149,6 +1159,7 @@ export class Game {
     if (this.navControls && !this.seats.navigator) {
       this.navControls.updateOnFoot();
       if (this.navControls.actions.exitEnter && active) this.requestExitEnter('navigator');
+      if (this.navControls.actions.headlampToggle && active) this.setLamp(!this.lampOn);
     }
   }
 
@@ -1176,10 +1187,18 @@ export class Game {
       npitch = this.navControls.lookPitch;
       this.navView.lean = this.navControls.lean;
     } else if (this.d.mode === 'solo') {
-      // AI passenger mostly looks at the tablet, glances at the road
+      // AI passenger looks at the tablet it holds (its head lamp follows), glances at the road now and then
       this.aiTimer += dt;
-      nyaw = 0.15 + Math.sin(this.aiTimer * 0.7) * 0.15;
-      npitch = this.cabin && this.cabin.held === 0 ? -0.45 : -0.1;
+      this.aiGlance -= dt;
+      if (this.aiGlance < -4 - Math.random() * 3) this.aiGlance = 0.7;
+      if (this.cabin && this.cabin.held === 0 && this.aiGlance <= 0) {
+        const d = this.bodyObjects[0].position.clone().sub(this.navView.eyeLocal);
+        nyaw = Math.atan2(-d.x, -d.z);
+        npitch = Math.asin(clamp(d.y / Math.max(d.length(), 1e-3), -1, 1));
+      } else {
+        nyaw = 0.1 + Math.sin(this.aiTimer * 0.7) * 0.1;
+        npitch = -0.1;
+      }
     }
     this.navView.update(dt, this.cs.accelLocal, nyaw, npitch);
     this.driverBody.pose(this.driverView.motion.offset, dyaw * 0.9, dpitch * 0.8);
@@ -1201,13 +1220,7 @@ export class Game {
       doorHandle: this.doorStates.right ? this.car.doors.right.handle : null,
       enabled: !this.pausedLocal && !this.pausedRemote && this.phase !== 'loading' && !this.cinematic,
       lastDirectional: this.lastDirectional,
-      focusPoints: this.seats.driver ? [this.driverHeadLocal()] : [],
     };
-  }
-
-  /** Driver's eyes in car space, including head turn / lean from the seat view. */
-  private driverHeadLocal(): THREE.Vector3 {
-    return this.car.root.worldToLocal(this.driverView.camera.getWorldPosition(new THREE.Vector3()));
   }
 
   private updateNavigator(dt: number) {
@@ -1226,13 +1239,7 @@ export class Game {
     if (a.cantReach) this.d.ui.hint(`CAN'T REACH IT - HOLD ${nc.keys.tabletPickup.label.replace(' (hold)', '')} TO LEAN, OR WAIT FOR A CORNER TO SLIDE IT BACK`, 3);
     if (a.handsFull) this.d.ui.hint('YOUR HANDS ARE FULL - CLICK TO PUT DOWN WHAT YOU HOLD', 2.5);
     if (a.closeDoor && this.doorStates.right && this.closingDoorTimer.right <= 0) this.closingDoorTimer.right = 0.75;
-    if (a.torchTaken || a.torchReturned) this.carAudio.clack(0.4, 0.4);
-    if (a.torchToggle) this.setTorch(!this.torchOn);
-    if (a.mapTaken) this.d.audio.uiClick();
-    if (a.mapFold) {
-      cabin.setMapOpen(!cabin.mapOpen);
-      this.carAudio.rustle(0.4);
-    }
+    if (a.headlampToggle) this.setLamp(!this.lampOn);
     if (a.exitEnter) this.requestExitEnter('navigator');
     if (a.callout) {
       if (a.callout === 'left' || a.callout === 'left3') this.lastDirectional = 'left';
@@ -1241,11 +1248,10 @@ export class Game {
     }
     if (a.readNote) {
       if (this.tabletVisible && this.tabletLit && this.ins) s.callout('note', spokenNote(this.ins));
-      else this.d.ui.hint(this.tabletVisible ? 'TOO DARK TO READ THE TABLET - USE THE FLASHLIGHT' : "YOU CAN'T SEE THE TABLET!", 2);
+      else this.d.ui.hint(this.tabletVisible ? `TOO DARK TO READ THE TABLET - HEAD LAMP: ${nc.keys.headlamp.label}` : "YOU CAN'T SEE THE TABLET!", 2);
     }
     if (cabin.held >= 0) nc.holdPose(ctx, this.holdPos, this.holdQuat, cabin.oneHanded);
-    if (cabin.torchHeld) nc.torchPose(ctx, cabin.held >= 0 ? this.holdPos : null, this.torchPos, this.torchQuat);
-    // cursor feedback
+    // cursor feedback (hidden anyway while the mouse is captured)
     const canvas = this.d.renderer.canvas;
     canvas.style.cursor = cabin.held >= 0 ? 'grabbing' : nc.hover >= 0 || nc.hoverDoor ? (nc.hoverReachable || nc.hoverDoor ? 'grab' : 'not-allowed') : 'crosshair';
   }
@@ -1293,7 +1299,7 @@ export class Game {
     db.left.solve(db.shoulderL, this.handL, db.shoulderL.clone().add(new THREE.Vector3(-0.35, -0.5, 0.1)), axis.clone().add(new THREE.Vector3(-0.6, 0, 0)));
     db.right.solve(db.shoulderR, this.handR, db.shoulderR.clone().add(new THREE.Vector3(0.35, -0.5, 0.1)), axis.clone().add(new THREE.Vector3(0.6, 0, 0)));
 
-    // ---- navigator: left hand = main object, right hand = flashlight / pointing / main object
+    // ---- navigator: left hand = main object, right hand = pointing / door / main object
     const nb = this.navBody;
     const restL = new THREE.Vector3(0.22, 0.17, 0.02);
     const restR = new THREE.Vector3(0.5, 0.17, 0.02);
@@ -1301,20 +1307,18 @@ export class Game {
     let nr = restR;
     const local = !!this.cabin;
     const held = local ? this.cabin!.held : this.remoteTabletHeld ? 0 : this.remoteHeldObj;
-    const torchHeld = local ? this.cabin!.torchHeld : this.remoteFlag(CABIN_FLAG.flashlightHeld);
     const pointing = local ? !!this.navControls?.pointing && this.seats.navigator : this.remoteFlag(CABIN_FLAG.pointing);
     const mainObj = held >= 0 ? this.bodyObjects[held] : null;
     let mainUp: THREE.Vector3 | null = null;
     if (mainObj) {
-      // grip the side edges from behind so the screen / paper stays visible
-      const half = held === CABIN_BODY.tablet ? 0.155 : held === CABIN_BODY.map ? 0.1 + (MAP_SPEC.open.hx - 0.1) * this.paperMap.fold + 0.02 : 0.05;
+      // grip the side edges from behind so the screen stays visible
+      const half = held === CABIN_BODY.tablet ? 0.155 : 0.05;
       nl = new THREE.Vector3(-half, -0.035, 0.035).applyQuaternion(mainObj.quaternion).add(mainObj.position);
       nr = new THREE.Vector3(half, -0.035, 0.035).applyQuaternion(mainObj.quaternion).add(mainObj.position);
       mainUp = new THREE.Vector3(0, -1, 0).applyQuaternion(mainObj.quaternion);
     }
     if (this.closingDoorTimer.right > 0) nr = this.doorHandleLocal('right', new THREE.Vector3());
     else if (pointing) nr = local ? this.navPointTarget(new THREE.Vector3()) : this.remoteReach.clone();
-    else if (torchHeld) nr = this.bodyObjects[CABIN_BODY.flashlight].position.clone();
     else if (!mainObj) {
       const reaching = this.navControls ? this.navControls.reaching : false;
       if (reaching) nr = this.bodyObjects[CABIN_BODY.tablet].position.clone();
@@ -1404,11 +1408,11 @@ export class Game {
     const camDir = new THREE.Vector3(0, 0, -1).applyQuaternion(this.navView.camera.quaternion);
     const inView = camDir.dot(tg.position.clone().sub(eye).normalize()) > 0.45;
     this.tabletVisible = this.seats.navigator && facing > 0.25 && dist < 1.3 && inView;
-    // at night the screen is only readable where the flashlight actually lights it
+    // at night the screen is only readable where the head lamp actually lights it
     if (this.night) {
       const p = this.tablet.screen.getWorldPosition(new THREE.Vector3());
       const n = new THREE.Vector3(0, 1, 0).applyQuaternion(this.tablet.screen.getWorldQuaternion(new THREE.Quaternion()));
-      this.tabletLit = this.flashlight.illuminationAt(p, n) > 0.08;
+      this.tabletLit = this.headlamp.illuminationAt(p, n) > 0.08;
     } else this.tabletLit = true;
     // AI co-driver
     if (this.ai && (this.phase === 'racing' || this.phase === 'countdown')) {
@@ -1443,32 +1447,34 @@ export class Game {
   }
 
   /**
-   * Flashlight in the driver's eyes: beam direction, distance and line of sight
-   * (cockpit geometry, tablet, map, objects and the navigator's body block it).
-   * Only the local driver's view is affected; re-arms once the beam moves away.
+   * Head lamp in the driver's eyes: beam direction, distance and line of sight
+   * (cockpit geometry, the tablet, loose objects and the navigator's body block
+   * it; glass doesn't). Only the local driver's view is affected, controls are
+   * untouched; re-arms once the beam has moved away.
    */
   private updateGlare(dt: number, now: number) {
     this.glare = Math.max(0, this.glare - dt / 1.0);
-    if (!this.driverControls || !this.seats.driver || !this.flashlight.on) {
+    if (!this.driverControls || !this.seats.driver || !this.headlamp.on) {
       this.glareAway += dt;
       if (this.glareAway > 0.5) this.glareArmed = true;
       return;
     }
     const origin = new THREE.Vector3();
     const dir = new THREE.Vector3();
-    this.flashlight.beam(origin, dir);
+    this.headlamp.beam(origin, dir);
     const eye = this.driverView.camera.getWorldPosition(new THREE.Vector3());
     const to = eye.clone().sub(origin);
     const dist = to.length();
     to.multiplyScalar(1 / Math.max(dist, 1e-4));
-    const inBeam = dist < 2.6 && to.dot(dir) > Math.cos(0.26);
+    const inBeam = dist < 5 && to.dot(dir) > Math.cos(0.26); // in the cabin or a few metres outside
     let clear = false;
     if (inBeam) {
       const ray = this.glareRay;
       ray.layers.enableAll();
       ray.set(origin.clone().addScaledVector(to, 0.06), to);
       ray.far = dist - 0.12;
-      const blockers = [this.cockpit.group, this.tablet.group, this.paperMap.group, ...this.loose, this.navBody.body, this.windshield.mesh];
+      const blockers: THREE.Object3D[] = [this.cockpit.group, this.tablet.group, ...this.loose, ...this.bodywork];
+      if (this.seats.navigator) blockers.push(this.navBody.body);
       const hits = ray.intersectObjects(blockers, true).filter((h) => (h.object as THREE.Mesh).visible !== false);
       clear = hits.length === 0;
     }
@@ -1571,9 +1577,9 @@ export class Game {
       nearDoor: !this.seats[role] && this.nearOwnDoor(role, foot.pos),
       nearHook: !this.seats[role] && this.nearHook(foot.pos),
       gripping: !this.seats[role] && foot.grip >= 0,
-      holding: held < 0 ? null : held === CABIN_BODY.tablet ? 'tablet' : held === CABIN_BODY.map ? 'map' : 'object',
-      mapOpen: !!cabin?.mapOpen,
-      torch: cabin?.torchHeld ? 'held' : cabin?.flashlightStowed ? 'stowed' : 'loose',
+      holding: held < 0 ? null : held === CABIN_BODY.tablet ? 'tablet' : 'object',
+      headlampOn: this.lampOn,
+      mouseCaptured: this.d.input.pointerLocked,
       doorOpen: this.doorStates[DOOR_OF[role]],
       voice: voiced,
     };
@@ -1603,6 +1609,7 @@ export class Game {
         resetHold: v.role === 'driver' && this.driverControls ? this.driverControls.resetHold : 0,
         glare: v.role === 'driver' && this.driverControls ? this.glare : 0,
         onFoot,
+        crosshair: v.role === 'navigator' && !onFoot && !!this.navControls?.crosshair && !this.cinematic,
       };
       const warns: string[] = [];
       if (onFoot) {
@@ -1617,20 +1624,19 @@ export class Game {
         const nc = this.navControls;
         data.grip = this.cabin.held >= 0 ? this.cabin.grip : null;
         const pick = nc.keys.tabletPickup.label.replace(' (hold)', '');
-        if (this.cabin.held === CABIN_BODY.map) {
-          if (this.cabin.mapOpen && this.cs.speed > 15) warns.push('THE MAP IS FLAPPING AROUND - HARD TO HOLD AT SPEED');
-        } else if (this.cabin.held !== CABIN_BODY.tablet) {
+        if (this.cabin.held !== CABIN_BODY.tablet) {
           warns.push(this.cabin.currPos[0].distanceTo(this.navBody.shoulderR) > nc.reach() ? `TABLET OUT OF REACH! HOLD ${pick}` : `TABLET DROPPED! CLICK IT OR PRESS ${pick}`);
         } else if (!this.tabletVisible) warns.push('TABLET FACING AWAY / OUT OF VIEW');
-        else if (!this.tabletLit) warns.push(`TOO DARK! LIGHT THE TABLET (${nc.keys.flashlight.label} / ${nc.keys.flashlightToggle.label})`);
+        else if (!this.tabletLit) warns.push(this.lampOn ? 'TOO DARK! LOOK AT THE TABLET TO LIGHT IT' : `TOO DARK! HEAD LAMP: ${nc.keys.headlamp.label}`);
         if (this.doorStates.right) warns.push(`DOOR OPEN! (${nc.keys.closeDoor?.label ?? 'CLICK THE HANDLE'})`);
         if (stuckRecent && this.cs.speed < EXIT_MAX_SPEED) warns.push(`STUCK: ${nc.keys.exitEnter.label} TO GET OUT AND PULL`);
         if (nc.mouseInView && (nc.hover >= 0 || nc.hoverDoor)) {
           const r = this.d.renderer.canvas.getBoundingClientRect();
+          // label next to the cursor, or under the centre crosshair while the mouse is captured
           data.hover = {
             text: nc.hoverDoor ? 'CLOSE DOOR' : nc.hoverReachable ? `GRAB ${CABIN_OBJECT_NAMES[nc.hover]}` : 'TOO FAR',
-            x: this.d.input.mouseX - r.left - v.rect.x * r.width,
-            y: this.d.input.mouseY - r.top,
+            x: nc.crosshair ? (v.rect.w * r.width) / 2 : this.d.input.mouseX - r.left - v.rect.x * r.width,
+            y: nc.crosshair ? r.height / 2 + 14 : this.d.input.mouseY - r.top,
           };
         }
       } else if (v.role === 'driver') {
@@ -1679,8 +1685,7 @@ export class Game {
     this.driverAvatar?.dispose();
     this.navAvatar?.dispose();
     this.tablet?.dispose();
-    this.flashlight?.dispose();
-    this.paperMap?.dispose();
+    this.headlamp?.dispose();
     for (const m of this.loose) m.geometry.dispose();
     this.minimap?.dispose();
     this.particles?.dispose();

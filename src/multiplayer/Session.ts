@@ -2,7 +2,6 @@
 // session and the in-process local session (offline / couch / solo modes).
 
 import { EventBus } from '../core/EventBus';
-import type { StageLength } from '../shared/constants';
 import type { ImpactReport, MudReport } from '../shared/protocol';
 import type {
   CalloutId,
@@ -18,12 +17,13 @@ import type {
   Role,
   RoomSnapshot,
   SeatStates,
+  StageParams,
 } from '../shared/types';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'offline';
 
 export interface SessionEvents {
-  load: { seed: number; length: StageLength; night: boolean };
+  load: StageParams;
   countdown: { endsAt: number };
   go: { startedAt: number };
   results: RaceResults;

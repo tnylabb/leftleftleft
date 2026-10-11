@@ -6,6 +6,7 @@ import { GeoBuilder, mat } from './geometry';
 
 export const FOG_COLOR = new THREE.Color(0xc9dce3);
 const NIGHT_FOG = new THREE.Color(0x0c1424);
+const MOUNTAIN_HAZE = new THREE.Color(0xb7cbd8);
 
 export class Sky {
   readonly group = new THREE.Group();
@@ -15,11 +16,17 @@ export class Sky {
   private follow = new THREE.Group();
   private sunDir = new THREE.Vector3(-0.55, 0.62, 0.42).normalize();
 
-  constructor(scene: THREE.Scene, shadowMapSize: number, readonly night = false) {
-    this.fogColor = (night ? NIGHT_FOG : FOG_COLOR).clone();
+  constructor(
+    scene: THREE.Scene,
+    shadowMapSize: number,
+    readonly night = false,
+    readonly mountain = false,
+  ) {
+    this.fogColor = (night ? NIGHT_FOG : mountain ? MOUNTAIN_HAZE : FOG_COLOR).clone();
     scene.background = this.fogColor.clone();
-    // less forward visibility than before; at night the headlights are what you get
-    scene.fog = night ? new THREE.Fog(this.fogColor.clone(), 18, 230) : new THREE.Fog(this.fogColor.clone(), 60, 380);
+    // less forward visibility than before; at night the headlights are what you get.
+    // Mountain air: haze that fades the valley below and the far peaks
+    scene.fog = night ? new THREE.Fog(this.fogColor.clone(), 18, 230) : mountain ? new THREE.Fog(this.fogColor.clone(), 45, 470) : new THREE.Fog(this.fogColor.clone(), 60, 380);
 
     this.hemi = night ? new THREE.HemisphereLight(0x3d4f7a, 0x12120e, 0.42) : new THREE.HemisphereLight(0xdff1ff, 0x7a7158, 1.35);
     this.group.add(this.hemi);
@@ -39,7 +46,7 @@ export class Sky {
     this.sun.shadow.normalBias = 0.035;
     this.group.add(this.sun, this.sun.target);
 
-    this.follow.add(this.buildDome(), this.buildHills(), this.buildClouds());
+    this.follow.add(this.buildDome(), mountain ? this.buildPeaks() : this.buildHills(), this.buildClouds());
     if (night) this.follow.add(this.buildStars());
     this.group.add(this.follow);
     scene.add(this.group);
@@ -110,6 +117,41 @@ export class Sky {
     return m;
   }
 
+  /** Distant mountain silhouettes: jagged low-poly peaks with snow caps, layered for depth. */
+  private buildPeaks(): THREE.Mesh {
+    const rng = new Rng(311);
+    const b = new GeoBuilder();
+    const snow = new THREE.Color(this.night ? 0x2a3242 : 0xf3f6f8);
+    const ring = (radius: number, color: THREE.Color, n: number, hMin: number, hMax: number, fade: number) => {
+      const c = color.clone().lerp(this.fogColor, fade);
+      const sc = snow.clone().lerp(this.fogColor, fade * 0.8);
+      for (let i = 0; i < n; i++) {
+        const a0 = (i / n) * Math.PI * 2 + rng.range(-0.02, 0.02);
+        const a1 = ((i + 1.6 + rng.next()) / n) * Math.PI * 2;
+        const am = (a0 + a1) / 2 + rng.range(-0.03, 0.03);
+        const h = rng.range(hMin, hMax);
+        const base0 = new THREE.Vector3(Math.cos(a0) * radius, -260, Math.sin(a0) * radius);
+        const base1 = new THREE.Vector3(Math.cos(a1) * radius, -260, Math.sin(a1) * radius);
+        const apex = new THREE.Vector3(Math.cos(am) * radius * 0.985, h, Math.sin(am) * radius * 0.985);
+        b.addTri(base0, apex, base1, c.clone().multiplyScalar(0.9 + rng.next() * 0.16));
+        if (h > hMin + (hMax - hMin) * 0.35) {
+          // snow cap: the top quarter of the peak
+          const t = 0.72;
+          const l = base0.clone().lerp(apex, t);
+          const r = base1.clone().lerp(apex, t);
+          const ap = apex.clone().multiplyScalar(0.999);
+          b.addTri(l, ap, r, sc);
+        }
+      }
+    };
+    ring(520, new THREE.Color(this.night ? 0x111a26 : 0x7d8ea0), 26, 160, 330, 0.5);
+    ring(490, new THREE.Color(this.night ? 0x0f1a14 : 0x6d7c86), 34, 90, 230, 0.32);
+    const m = new THREE.Mesh(b.build(), new THREE.MeshBasicMaterial({ vertexColors: true, fog: false, side: THREE.DoubleSide, depthWrite: false }));
+    m.renderOrder = -9;
+    m.frustumCulled = false;
+    return m;
+  }
+
   private buildClouds(): THREE.Mesh {
     const rng = new Rng(7);
     const b = new GeoBuilder();
@@ -134,7 +176,8 @@ export class Sky {
 
   /** Keeps the sky and shadow frustum centred on the focus point (the car). */
   update(focus: THREE.Vector3) {
-    this.follow.position.set(focus.x, 0, focus.z);
+    // mountain peaks stay on the horizon wherever you are on the slope
+    this.follow.position.set(focus.x, this.mountain ? focus.y : 0, focus.z);
     // snap to shadow texel size to avoid shimmering
     const texel = 96 / this.sun.shadow.mapSize.x;
     const fx = Math.round(focus.x / texel) * texel;

@@ -14,9 +14,10 @@ export interface ControlsState {
   nearDoor: boolean;
   nearHook: boolean;
   gripping: boolean;
-  holding: 'tablet' | 'map' | 'object' | null;
-  mapOpen: boolean;
-  torch: 'held' | 'stowed' | 'loose';
+  holding: 'tablet' | 'object' | null;
+  headlampOn: boolean;
+  /** The mouse is captured (pointer lock): look with the mouse, interact via the centre crosshair. */
+  mouseCaptured: boolean;
   doorOpen: boolean;
   voice: boolean;
 }
@@ -55,24 +56,22 @@ export function controlRows(s: ControlsState): Row[] {
   } else {
     const k = NAV_KEYS[s.mode];
     if (s.inCar) {
-      rows.push(['Left click', s.holding ? 'Put down what you hold' : 'Grab tablet / map / object']);
-      rows.push(['Right mouse (hold)', 'Look around']);
+      if (s.mouseCaptured) {
+        rows.push(['Mouse', 'Look around']);
+        rows.push(['Left click', s.holding ? 'Put down what you hold' : 'Grab what the crosshair is on']);
+      } else {
+        rows.push(['Click the game', 'Capture the mouse to look around']);
+        rows.push(['Left click', s.holding ? 'Put down what you hold' : 'Grab tablet / object']);
+        rows.push(['Right mouse (hold)', 'Look around']);
+      }
       if (s.holding) {
         rows.push(['Mouse wheel', 'Hold closer / farther']);
-        if (s.holding === 'map') rows.push([`${k.turnLeft.label} ${k.turnRight.label}`, 'Spin the map']);
-        else rows.push([`${k.turnLeft.label} ${k.turnRight.label}`, 'Turn it (show the driver!)']);
+        rows.push(['Middle-drag', 'Rotate it']);
+        rows.push([`${k.turnLeft.label} ${k.turnRight.label}`, 'Turn it (show the driver!)']);
         rows.push([`${k.tiltUp.label} ${k.tiltDown.label}`, 'Tilt']);
       }
       if (!s.holding) rows.push([k.tabletPickup.label, 'Pick up the tablet (lean)']);
-      if (s.torch === 'held') {
-        rows.push([k.flashlight.label, 'Put the flashlight back']);
-        rows.push([k.flashlightToggle.label, 'Flashlight on / off']);
-      } else {
-        rows.push([k.flashlight.label, s.torch === 'stowed' ? 'Take the flashlight' : 'Pick up the flashlight']);
-        if (s.torch === 'stowed') rows.push([k.flashlightToggle.label, 'Flashlight on / off']);
-      }
-      if (s.holding === 'map') rows.push([k.map.label, s.mapOpen ? 'Fold the map' : 'Unfold the map']);
-      else if (!s.holding) rows.push([k.map.label, 'Paper map (glovebox)']);
+      rows.push([k.headlamp.label, s.headlampOn ? 'Head lamp off' : 'Head lamp on']);
       rows.push([k.point.label, 'Point (aim by looking)']);
       rows.push([CALLOUT_KEY_LABEL, 'Shout a callout']);
       rows.push([k.readNote.label, 'Read the next pace note aloud']);
@@ -84,12 +83,13 @@ export function controlRows(s: ControlsState): Row[] {
       rows.push([k.footRun.label, 'Run']);
       if (s.gripping) rows.push(['Left mouse + walk away', 'Pull the car (release to let go)']);
       else if (s.nearHook) rows.push(['Left mouse (hold)', 'Grip the tow hook']);
+      rows.push([k.headlamp.label, s.headlampOn ? 'Head lamp off' : 'Head lamp on']);
       if (s.nearDoor) rows.push([k.exitEnter.label, 'Get back in']);
     }
   }
   if (s.online && s.voice) rows.push([COMMON_KEYS.talk.label, 'Push to talk']);
   rows.push([COMMON_KEYS.controls.label, 'This list']);
-  rows.push([COMMON_KEYS.pause.label, s.online ? 'Menu (the stage keeps running)' : 'Pause']);
+  rows.push([COMMON_KEYS.pause.label, s.online ? 'Menu + free the mouse (the stage keeps running)' : 'Pause + free the mouse']);
   return rows;
 }
 
@@ -103,8 +103,8 @@ export function referenceHtml(role: Role, mode: BindMode): string {
     nearHook: true,
     gripping: false,
     holding: null,
-    mapOpen: false,
-    torch: 'stowed',
+    headlampOn: false,
+    mouseCaptured: true,
     doorOpen: true,
     voice: false,
   };
@@ -120,8 +120,7 @@ export function referenceHtml(role: Role, mode: BindMode): string {
   };
   add(controlRows({ ...base, role, inCar: true }));
   if (role === 'navigator') {
-    add(controlRows({ ...base, role, inCar: true, holding: 'tablet', torch: 'held' }));
-    add(controlRows({ ...base, role, inCar: true, holding: 'map', mapOpen: true }));
+    add(controlRows({ ...base, role, inCar: true, holding: 'tablet' }));
   }
   lines.push('<b>On foot</b>');
   add(controlRows({ ...base, role, inCar: false }));

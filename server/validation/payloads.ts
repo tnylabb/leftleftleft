@@ -1,7 +1,7 @@
 // Input sanitisation for everything a client can send.
 
 import { MAX_NAME_LENGTH, ROOM_CODE_LENGTH, STAGE_LENGTHS, type StageLength } from '../../src/shared/constants';
-import type { DoorSide, Role } from '../../src/shared/types';
+import { STAGE_MAPS, type DoorSide, type Role, type StageMap } from '../../src/shared/types';
 
 export const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
 
@@ -26,6 +26,7 @@ export function normalizeCode(raw: unknown): string | null {
 export const isRole = (v: unknown): v is Role => v === 'driver' || v === 'navigator';
 export const isDoorSide = (v: unknown): v is DoorSide => v === 'left' || v === 'right';
 export const isStageLength = (v: unknown): v is StageLength => typeof v === 'string' && v in STAGE_LENGTHS;
+export const isStageMap = (v: unknown): v is StageMap => typeof v === 'string' && (STAGE_MAPS as string[]).includes(v);
 export const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 export const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 

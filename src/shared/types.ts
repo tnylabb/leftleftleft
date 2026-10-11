@@ -5,11 +5,16 @@ export type DoorSide = 'left' | 'right';
 
 export type RoomPhase = 'lobby' | 'loading' | 'countdown' | 'racing' | 'finished';
 
+/** Which landscape the stage is generated in. */
+export type StageMap = 'countryside' | 'mountain';
+export const STAGE_MAPS: StageMap[] = ['countryside', 'mountain'];
+
 export interface StageParams {
   seed: number;
   length: StageLength;
-  /** Night stage: dark, headlights, the tablet needs the flashlight to be read. */
+  /** Night stage: dark, headlights, the tablet needs the head lamp to be read. */
   night: boolean;
+  map: StageMap;
 }
 
 export type CornerSeverity = 'keep' | 'easy' | 'medium' | 'hard' | 'hairpin';
@@ -71,6 +76,13 @@ export interface StageData {
   puddles: Puddle[];
   bales: HayBale[];
   checkpoints: Checkpoint[];
+  /** Road half width per sample (narrow mountain ledges, wider hairpins / run-offs). */
+  halfWidths: Float64Array;
+  /**
+   * Per sample, 0..1: how abruptly the ground falls away on the downhill side
+   * (mountain: 1 = sheer drop right at the road edge). 0 on the countryside map.
+   */
+  exposure: Float64Array;
   bounds: { minX: number; maxX: number; minZ: number; maxZ: number };
   hash: number;
 }

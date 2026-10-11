@@ -25,6 +25,13 @@ const COL = {
   edge: new THREE.Color(0x8a7656),
   dirt: new THREE.Color(0x7d6a4c),
   rock: new THREE.Color(0x7f7c72),
+  // mountain palette
+  alpine: new THREE.Color(0x8fa24c),
+  alpineDry: new THREE.Color(0xa9a35a),
+  scree: new THREE.Color(0x9a948a),
+  cliff: new THREE.Color(0x6e6a64),
+  cliffDark: new THREE.Color(0x57534f),
+  snow: new THREE.Color(0xeef2f4),
 };
 
 export interface TerrainBuildProgress {
@@ -80,7 +87,8 @@ export class Terrain {
         }
       }
     }
-    const res = this.quality === 'high' ? 32 : this.quality === 'medium' ? 26 : 20;
+    // the mountain needs finer triangles for its cuts and drops at the road edge
+    const res = (this.quality === 'high' ? 32 : this.quality === 'medium' ? 26 : 20) + (this.field.mountain ? 6 : 0);
     const total = near.length + far.size;
     let done = 0;
     for (const [cx, cz] of near) {
@@ -94,6 +102,7 @@ export class Terrain {
   }
 
   private faceColor(cx: number, cy: number, cz: number, ny: number, rng: Rng): THREE.Color {
+    if (this.field.mountain) return this.mountainColor(cx, cy, cz, ny, rng);
     const q = this.field.queryRoad(cx, cz);
     const c = this.tmpColor;
     const n = this.colorNoise.fbm(cx / 90, cz / 90, 2);
@@ -107,6 +116,25 @@ export class Terrain {
       const m = this.colorNoise.noise(cx / 40 + 13, cz / 40 - 7);
       if (m > 0.35) c.lerp(COL.meadow, Math.min(1, (m - 0.35) * 2));
     }
+    const shade = 0.93 + rng.next() * 0.12;
+    return c.multiplyScalar(shade);
+  }
+
+  /** Mountain: bare rock on cuts and steep faces, alpine grass and scree, snow high up. */
+  private mountainColor(cx: number, cy: number, cz: number, ny: number, rng: Rng): THREE.Color {
+    const q = this.field.queryRoad(cx, cz);
+    const c = this.tmpColor;
+    const n = this.colorNoise.fbm(cx / 70, cz / 70, 2);
+    const hw = q.dist < Infinity ? this.field.halfWidthAt(q.idx) : HW;
+    const snowLine = this.field.stage.ys[0] + 95 + n * 25;
+    if (q.dist < hw + 0.45) c.copy(COL.edge);
+    else if (ny < 0.62) c.copy(COL.cliffDark).lerp(COL.cliff, Math.max(0, n + 0.5));
+    else if (ny < 0.8 || (q.dist < hw + 3.2 && cy > q.roadY + 0.6)) c.copy(COL.cliff).lerp(COL.scree, Math.max(0, Math.min(1, n + 0.4)));
+    else {
+      c.copy(COL.alpine).lerp(COL.alpineDry, Math.min(1, Math.max(0, n * 1.3 + 0.45)));
+      if (this.colorNoise.noise(cx / 30 + 13, cz / 30 - 7) > 0.45) c.lerp(COL.scree, 0.65);
+    }
+    if (cy > snowLine && ny > 0.55) c.lerp(COL.snow, Math.min(1, (cy - snowLine) / 30 + 0.4));
     const shade = 0.93 + rng.next() * 0.12;
     return c.multiplyScalar(shade);
   }

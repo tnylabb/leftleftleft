@@ -4,7 +4,7 @@
 import type { AudioEngine } from '../audio/AudioEngine';
 import type { Settings, SettingsData } from '../core/Settings';
 import { GAME_TAGLINE, type StageLength } from '../shared/constants';
-import type { RaceResults, Role, RoomSnapshot } from '../shared/types';
+import type { RaceResults, Role, RoomSnapshot, StageMap } from '../shared/types';
 import type { ConnectionStatus } from '../multiplayer/Session';
 import type { VoiceState } from '../multiplayer/VoiceChat';
 import { NAV_HOTKEYS, CALLOUT_TEXT } from '../navigation/Callouts';
@@ -33,10 +33,12 @@ export interface HudData {
   tab: Row[] | null;
   /** 0..1 progress of holding the emergency-reset key. */
   resetHold: number;
-  /** 0..1 flashlight glare (driver only). */
+  /** 0..1 head lamp glare (driver only). */
   glare: number;
   /** Driver / navigator view is showing an on-foot camera. */
   onFoot: boolean;
+  /** Navigator interacting through the centre crosshair (mouse captured). */
+  crosshair?: boolean;
 }
 
 const fmtTime = (ms: number) => {
@@ -117,7 +119,7 @@ export class UI {
   }
 
   // --- menu ------------------------------------------------------------------
-  renderMenu(opts: { server: ConnectionStatus | 'checking'; seat: string | null; length: StageLength; night: boolean; error?: string }) {
+  renderMenu(opts: { server: ConnectionStatus | 'checking'; seat: string | null; length: StageLength; night: boolean; map: StageMap; error?: string }) {
     const s = this.screens.get('menu')!;
     const name = esc(this.settings.data.name);
     const statusText =
@@ -144,7 +146,8 @@ export class UI {
             <input type="text" class="code" id="in-code" maxlength="4" placeholder="CODE" data-enter="join">
             <button class="btn grow" data-action="join" ${opts.server !== 'online' ? 'disabled' : ''}><span>JOIN WITH CODE</span></button>
           </div>
-          <div class="row" style="margin-top:6px"><span class="muted small">Local stage length:</span>
+          <div class="row" style="margin-top:6px"><span class="muted small">Local stage:</span>
+            <div class="seg"><button class="btn small ${opts.map === 'countryside' ? 'selected' : ''}" data-action="map" data-map="countryside"><span>COUNTRYSIDE</span></button><button class="btn small ${opts.map === 'mountain' ? 'selected' : ''}" data-action="map" data-map="mountain"><span>MOUNTAIN</span></button></div>
             <div class="seg">${lenBtn('short', 'SHORT')}${lenBtn('medium', 'MEDIUM')}${lenBtn('long', 'LONG')}</div>
             <div class="seg"><button class="btn small ${!opts.night ? 'selected' : ''}" data-action="time" data-night="0"><span>DAY</span></button><button class="btn small ${opts.night ? 'selected' : ''}" data-action="time" data-night="1"><span>NIGHT</span></button></div>
           </div>
@@ -211,7 +214,8 @@ export class UI {
           ${roleBtn('navigator', 'NAVIGATOR', 'Hold the tablet. Shout. Don’t drop it.')}
         </div>
         <div class="row" style="margin-top:14px">
-          <span class="muted small">Stage length${host ? '' : ' (host decides)'}:</span>
+          <span class="muted small">Stage${host ? '' : ' (host decides)'}:</span>
+          <div class="seg"><button class="btn small ${room.stage.map === 'countryside' ? 'selected' : ''}" data-action="stage-map" data-map="countryside" ${host ? '' : 'disabled'}><span>COUNTRYSIDE</span></button><button class="btn small ${room.stage.map === 'mountain' ? 'selected' : ''}" data-action="stage-map" data-map="mountain" ${host ? '' : 'disabled'}><span>MOUNTAIN</span></button></div>
           <div class="seg">${len('short', 'SHORT')}${len('medium', 'MEDIUM')}${len('long', 'LONG')}</div>
           <div class="seg"><button class="btn small ${!room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="0" ${host ? '' : 'disabled'}><span>DAY</span></button><button class="btn small ${room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="1" ${host ? '' : 'disabled'}><span>NIGHT</span></button></div>
           <span class="muted small">seed ${room.stage.seed}</span>
@@ -264,7 +268,7 @@ export class UI {
         <div class="hud-status"></div>
         <div class="hud-warn"></div>
         ${v.role === 'driver' ? `<div class="hud-speed"><span class="v">0</span><span class="g">1</span><div class="u">KM/H</div></div>` : ''}
-        ${v.role === 'navigator' ? `<div class="hud-grip">GRIP<div class="track"><div class="fill" style="width:100%"></div></div></div><div class="hud-hover"></div>` : ''}
+        ${v.role === 'navigator' ? `<div class="hud-grip">GRIP<div class="track"><div class="fill" style="width:100%"></div></div></div><div class="hud-hover"></div><div class="hud-cross"></div>` : ''}
         ${v.role === 'driver' ? `<div class="hud-reset">EMERGENCY RESET<div class="track"><div class="fill"></div></div></div>` : ''}
         <div class="hud-tabhint">hold <kbd>Tab</kbd> for controls</div>
         <div class="hud-tab"><div class="tab-panel"><h4>${v.role.toUpperCase()} CONTROLS</h4><div class="tab-rows"></div></div>${callouts}</div>`;
@@ -322,6 +326,8 @@ export class UI {
         w.classList.toggle('show', !!d.warn);
       }
     }
+    const cross = q('.hud-cross');
+    if (cross) cross.style.display = d.crosshair ? 'block' : 'none';
     const hov = q('.hud-hover');
     if (hov) {
       if (d.hover) {
@@ -462,14 +468,17 @@ export class UI {
         calling the turns. Hit every checkpoint and reach the finish. Crashes, missed turns and missed checkpoints all count.</p>
         <p class="muted">Use voice chat (built-in, Discord, or just shout across the room). The navigator can also hit the
         number keys to shout preset callouts, read the next pace note aloud, or physically point the way.</p>
+        <p class="muted">Two stages: the <b>countryside</b> - fast gravel through the forest - and the <b>mountain</b>, a narrow road
+        carved into a steep mountainside. Leave the road on the drop side and you go over the edge: the car falls and tumbles
+        down the slope for real. Land on a lower bend and it doesn't count - hold R to go back to where you left the road.</p>
         <div class="help">
           <div><h3>DRIVER</h3>${referenceHtml('driver', 'single')}</div>
           <div><h3>NAVIGATOR</h3>${referenceHtml('navigator', 'single')}</div>
         </div>
         <div class="help"><div><h3>CABIN CHAOS</h3>Mud puddles splatter the windscreen: each press of the wiper key gives one sweep
         that only clears its arc, so hand-wipe the corners. Big hits can unlatch a door - it swings around and drags the car until
-        you close it. Loose objects fly. At night the tablet's screen is only readable in the flashlight beam - and don't blind
-        your driver with it.</div>
+        you close it. Loose objects fly. At night the tablet's screen is only readable in your head lamp's beam - look at it to
+        light it, and try not to look your driver in the eyes.</div>
         <div><h3>STUCK?</h3>If the car is stuck, stop, get out and grab a tow hook (front or rear bumper). Walk away from the car
         while holding on to pull it free - pull together for more force, and pull along the car rather than sideways. The
         emergency reset is a last resort and costs 5 seconds. Split screen uses separate keys for each player: see the pause menu.</div></div>

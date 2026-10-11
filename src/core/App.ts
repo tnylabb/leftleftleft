@@ -9,7 +9,7 @@ import type { ConnectionStatus, GameSession } from '../multiplayer/Session';
 import { VoiceChat } from '../multiplayer/VoiceChat';
 import type { Renderer } from '../rendering/Renderer';
 import type { StageLength } from '../shared/constants';
-import type { RoomSnapshot, StageParams } from '../shared/types';
+import type { RoomSnapshot, StageMap, StageParams } from '../shared/types';
 import { UI } from '../ui/UI';
 import { Input } from './Input';
 import { Settings } from './Settings';
@@ -38,6 +38,7 @@ export class App {
   private mode: GameMode = 'solo';
   private menuLength: StageLength = 'medium';
   private menuNight = false;
+  private menuMap: StageMap = 'countryside';
   private serverStatus: ConnectionStatus | 'checking' = 'checking';
   private loadToken = 0;
   private lastT = 0;
@@ -167,7 +168,7 @@ export class App {
   private showMenu() {
     this.ui.hideAll();
     this.ui.hideHud();
-    this.ui.renderMenu({ server: this.serverStatus, seat: this.serverStatus === 'online' ? this.savedSeatCode() : null, length: this.menuLength, night: this.menuNight, error: this.menuError });
+    this.ui.renderMenu({ server: this.serverStatus, seat: this.serverStatus === 'online' ? this.savedSeatCode() : null, length: this.menuLength, night: this.menuNight, map: this.menuMap, error: this.menuError });
     this.menuError = '';
     this.ui.show('menu');
     this.input.gameplay = false;
@@ -182,6 +183,10 @@ export class App {
         break;
       case 'time':
         this.menuNight = data.night === '1';
+        this.showMenu();
+        break;
+      case 'map':
+        this.menuMap = data.map === 'mountain' ? 'mountain' : 'countryside';
         this.showMenu();
         break;
       case 'create':
@@ -226,13 +231,28 @@ export class App {
         break;
       }
       case 'stage':
-        if (this.online?.room) this.online.setStage((data.length as StageLength) ?? 'medium', this.online.room.stage.seed, this.online.room.stage.night);
+        if (this.online?.room) {
+          const st = this.online.room.stage;
+          this.online.setStage((data.length as StageLength) ?? 'medium', st.seed, st.night, st.map);
+        }
         break;
       case 'stage-time':
-        if (this.online?.room) this.online.setStage(this.online.room.stage.length, this.online.room.stage.seed, data.night === '1');
+        if (this.online?.room) {
+          const st = this.online.room.stage;
+          this.online.setStage(st.length, st.seed, data.night === '1', st.map);
+        }
+        break;
+      case 'stage-map':
+        if (this.online?.room) {
+          const st = this.online.room.stage;
+          this.online.setStage(st.length, st.seed, st.night, data.map === 'mountain' ? 'mountain' : 'countryside');
+        }
         break;
       case 'reroll':
-        if (this.online?.room) this.online.setStage(this.online.room.stage.length, undefined, this.online.room.stage.night);
+        if (this.online?.room) {
+          const st = this.online.room.stage;
+          this.online.setStage(st.length, undefined, st.night, st.map);
+        }
         break;
       case 'copy-code':
         void navigator.clipboard?.writeText(data.code ?? '').then(() => {
@@ -385,7 +405,7 @@ export class App {
   private startLocal(mode: 'couch' | 'solo') {
     this.teardownSession();
     this.mode = mode;
-    const s = new LocalSession(mode === 'couch' ? ['driver', 'navigator'] : ['driver'], this.menuLength, this.menuNight);
+    const s = new LocalSession(mode === 'couch' ? ['driver', 'navigator'] : ['driver'], this.menuLength, this.menuNight, this.menuMap);
     this.session = s;
     this.unsub.push(s.on('load', (p) => void this.startGame(p)));
     s.start();
@@ -431,8 +451,8 @@ export class App {
       this.ui.banner('WAITING FOR YOUR CO-DRIVER TO LOAD THE STAGE…');
     }
     if (this.isDriver && this.mode !== 'couch') this.ui.hint('CLICK THE SCREEN TO LOOK AROUND · HOLD TAB FOR CONTROLS', 5);
-    if (this.mode === 'couch') this.ui.hint('DRIVER: WASD · NAVIGATOR: MOUSE + ARROWS · HOLD TAB FOR CONTROLS', 6);
-    else if (!this.isDriver) this.ui.hint('CLICK THE TABLET TO PICK IT UP · HOLD TAB FOR CONTROLS', 6);
+    if (this.mode === 'couch') this.ui.hint('DRIVER: WASD · NAVIGATOR: CLICK TO CAPTURE THE MOUSE · HOLD TAB FOR CONTROLS', 6);
+    else if (!this.isDriver) this.ui.hint('CLICK TO CAPTURE THE MOUSE · AIM AT THE TABLET AND CLICK TO PICK IT UP · HOLD TAB FOR CONTROLS', 7);
     this.renderer.canvas.focus();
   }
 

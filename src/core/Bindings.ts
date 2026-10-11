@@ -41,9 +41,8 @@ export interface NavKeys {
   tiltUp: Binding;
   tiltDown: Binding;
   tabletPickup: Binding;
-  flashlight: Binding;
-  flashlightToggle: Binding;
-  map: Binding;
+  /** Head lamp on / off. */
+  headlamp: Binding;
   point: Binding;
   closeDoor: Binding | null; // null = only by clicking the door handle
   exitEnter: Binding;
@@ -113,9 +112,7 @@ export const NAV_KEYS: Record<BindMode, NavKeys> = {
     tiltUp: b('↑', 'ArrowUp'),
     tiltDown: b('↓', 'ArrowDown'),
     tabletPickup: b('Q (hold)', 'KeyQ'),
-    flashlight: b('F', 'KeyF'),
-    flashlightToggle: b('G', 'KeyG'),
-    map: b('M', 'KeyM'),
+    headlamp: b('G', 'KeyG'),
     point: b('X (hold)', 'KeyX'),
     closeDoor: b('C', 'KeyC'),
     exitEnter: b('E', 'KeyE'),
@@ -132,9 +129,7 @@ export const NAV_KEYS: Record<BindMode, NavKeys> = {
     tiltUp: b('↑', 'ArrowUp'),
     tiltDown: b('↓', 'ArrowDown'),
     tabletPickup: b('Right Shift (hold)', 'ShiftRight'),
-    flashlight: b('F', 'KeyF'),
-    flashlightToggle: b('L', 'KeyL'),
-    map: b('M', 'KeyM'),
+    headlamp: b('L', 'KeyL'), // G is the driver's door key in split screen
     point: b('X (hold)', 'KeyX'),
     closeDoor: null,
     exitEnter: b('P', 'KeyP'),

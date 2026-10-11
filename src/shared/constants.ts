@@ -54,8 +54,8 @@ export const NAVIGATOR_EYE = { x: 0.36, y: 0.58, z: 0.2 };
 
 export const LOOSE_OBJECT_COUNT = 4; // small loose objects (bottle, cup, notes, snacks)
 /** Physics body indices in the cabin world. */
-export const CABIN_BODY = { tablet: 0, flashlight: 5, map: 6 } as const;
-export const CABIN_BODY_COUNT = 7;
+export const CABIN_BODY = { tablet: 0 } as const;
+export const CABIN_BODY_COUNT = 5; // tablet + loose objects
 
 // --- On foot / vehicle recovery (car-local positions) ---------------------------
 /** Tow hooks the players can grip to pull the car: front and rear. */

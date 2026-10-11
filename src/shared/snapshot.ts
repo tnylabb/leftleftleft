@@ -68,9 +68,8 @@ export const CABIN = {
   pullX: 21 + (CABIN_BODY_COUNT - 1) * 7, // world-space pull force on the car (N)
   pullY: 22 + (CABIN_BODY_COUNT - 1) * 7,
   pullZ: 23 + (CABIN_BODY_COUNT - 1) * 7,
-  mapFold: 24 + (CABIN_BODY_COUNT - 1) * 7, // 0 folded .. 1 unfolded
-  footWalk: 25 + (CABIN_BODY_COUNT - 1) * 7,
-  LENGTH: 26 + (CABIN_BODY_COUNT - 1) * 7,
+  footWalk: 24 + (CABIN_BODY_COUNT - 1) * 7,
+  LENGTH: 25 + (CABIN_BODY_COUNT - 1) * 7,
 } as const;
 
 export const CABIN_FLAG = {
@@ -79,11 +78,8 @@ export const CABIN_FLAG = {
   closingDoor: 4,
   navOut: 8,
   pointing: 16,
-  flashlightOn: 32,
-  flashlightHeld: 64,
-  flashlightStowed: 128,
-  mapStowed: 256,
-  mapHeld: 512,
+  /** Navigator's head lamp is on (its pose follows the synced head / on-foot look direction). */
+  headlampOn: 32,
 } as const;
 
 /** Offset of a cabin body's pose block (index 0 = tablet). */

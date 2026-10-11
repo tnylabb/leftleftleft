@@ -25,6 +25,12 @@ export class RaceTracker {
   topSpeed = 0;
   wrongWay = false;
   finished = false;
+  /**
+   * The car is on a part of the road it hasn't legitimately driven to (e.g. it
+   * fell down the mountain onto a lower leg). Nothing counts there: no
+   * progress, checkpoints or finish until it is back on its own stretch.
+   */
+  offRoute = false;
   private wrongTimer = 0;
   private rightTimer = 0;
   private flaggedCorners = new Set<number>();
@@ -50,7 +56,8 @@ export class RaceTracker {
     this.prevIdx = idx;
   }
 
-  update(x: number, z: number, vx: number, vz: number, dt: number, raceTimeMs: number): RaceEvent[] {
+  /** `y` (car height) lets a car that has fallen off the road not count as driving along it. */
+  update(x: number, z: number, vx: number, vz: number, dt: number, raceTimeMs: number, y = NaN): RaceEvent[] {
     const events: RaceEvent[] = [];
     if (this.finished) return events;
     const s = this.stage;
@@ -65,13 +72,17 @@ export class RaceTracker {
     this.lastZ = z;
 
     const idx = loc.idx;
-    const continuous = Math.abs(idx - this.prevIdx) <= 12;
+    // progress only counts close to where the car has legitimately got to, and
+    // only on the road's level (not while tumbling down the mountainside below it)
+    this.offRoute = idx > this.maxIdx + 14;
+    const onLevel = !Number.isFinite(y) || Math.abs(y - loc.roadY) < 4.5;
+    const continuous = Math.abs(idx - this.prevIdx) <= 12 && !this.offRoute && onLevel;
     const onLine = Math.abs(loc.lateral) <= CHECKPOINT_LATERAL_TOLERANCE;
 
     // --- checkpoints ---------------------------------------------------------
     while (this.nextCheckpoint < s.checkpoints.length) {
       const cp = s.checkpoints[this.nextCheckpoint];
-      if (idx < cp.idx) break;
+      if (idx < cp.idx || this.offRoute || !onLevel) break;
       if (this.prevIdx < cp.idx && continuous && onLine) {
         this.checkpointsHit++;
         events.push({ type: 'checkpoint', index: cp.index, total: s.checkpoints.length, splitMs: raceTimeMs });

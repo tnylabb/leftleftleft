@@ -280,7 +280,8 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; 
 .hud-reset .track { height: 10px; background: rgba(0,0,0,0.6); border: 2px solid var(--ink); margin-top: 4px; }
 .hud-reset .fill { height: 100%; width: 0; background: var(--red); }
 
-/* ---------- flashlight glare (driver only) ---------- */
+/* ---------- head lamp glare (driver only) ---------- */
+.hud-cross { display: none; position: absolute; left: 50%; top: 50%; width: 6px; height: 6px; margin: -3px 0 0 -3px; border-radius: 50%; background: rgba(255,255,255,0.85); box-shadow: 0 0 0 1.5px rgba(0,0,0,0.55); pointer-events: none; }
 .hud-glare { position: absolute; inset: 0; background: radial-gradient(ellipse at 62% 48%, #ffffff 0%, #fff7e0 38%, rgba(255,247,224,0.85) 70%, rgba(255,240,210,0.6) 100%); opacity: 0; pointer-events: none; }
 
 /* ---------- cinematic finish ---------- */

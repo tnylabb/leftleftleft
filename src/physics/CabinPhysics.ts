@@ -3,23 +3,16 @@
 // braking, bumps, jumps (weightless!) and crashes throw loose objects around
 // without them ever tunnelling through a fast-moving car.
 //
-// The navigator has two "hands": the main slot (tablet, paper map or a small
-// object, held with both hands or the left hand alone) and the torch slot
-// (the flashlight, always in the right hand).
+// The navigator holds one object at a time (the tablet or a small loose
+// object), with both hands or - while the right hand points or closes the door -
+// with the left hand alone.
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { LAYOUT } from '../cockpit/layout';
-import { CABIN_BODY, CABIN_BOUNDS, FIXED_DT } from '../shared/constants';
+import { CABIN_BOUNDS, FIXED_DT } from '../shared/constants';
 import { clamp } from '../shared/math';
-import {
-  FLASHLIGHT_HOLDER,
-  FLASHLIGHT_SPEC,
-  GLOVEBOX_OPENING,
-  LOOSE_OBJECTS,
-  MAP_SPEC,
-  TABLET_SPEC,
-} from '../tablet/cabinObjects';
+import { LOOSE_OBJECTS, TABLET_SPEC } from '../tablet/cabinObjects';
 
 export type DropReason = 'impact' | 'gforce' | 'snag' | 'released';
 
@@ -46,7 +39,7 @@ interface HandSlot {
 export class CabinPhysics {
   readonly world: RAPIER.World;
   private events: RAPIER.EventQueue;
-  /** index 0 = tablet, 1..4 loose objects, 5 flashlight, 6 paper map */
+  /** index 0 = tablet, 1..4 loose objects */
   readonly bodies: RAPIER.RigidBody[] = [];
   private colliders: RAPIER.Collider[] = [];
   private colliderIndex = new Map<number, number>();
@@ -55,14 +48,8 @@ export class CabinPhysics {
   readonly currPos: THREE.Vector3[] = [];
   readonly currQuat: THREE.Quaternion[] = [];
   private main: HandSlot = { index: -1, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), grip: 100, errorTime: 0 };
-  private torch: HandSlot = { index: -1, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), grip: 100, errorTime: 0 };
   /** The main object is held by the left hand only (right hand busy). */
   oneHanded = false;
-  /** Extra grip drain multiplier for awkward objects (an open map at speed). */
-  awkwardness = 1;
-  flashlightStowed = true;
-  mapStowed = true;
-  mapOpen = false;
   private lastContact: number[] = [];
   private time = 0;
   private regrabBlockedUntil = 0;
@@ -83,10 +70,6 @@ export class CabinPhysics {
 
   get grip(): number {
     return this.main.grip;
-  }
-
-  get torchHeld(): boolean {
-    return this.torch.index >= 0;
   }
 
   private addBox(hx: number, hy: number, hz: number, x: number, y: number, z: number, rx = 0, friction = 0.7) {
@@ -152,26 +135,6 @@ export class CabinPhysics {
       desc.setMass(o.mass).setFriction(0.6).setRestitution(o.name === 'water bottle' ? 0.35 : 0.2);
       this.addDynamic(desc, o.start.clone(), new THREE.Quaternion());
     }
-    // flashlight: cylinder along local Z
-    const f = FLASHLIGHT_SPEC;
-    this.addDynamic(
-      RAPIER.ColliderDesc.cylinder(f.halfLength, f.radius)
-        .setRotation(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2))
-        .setMass(f.mass)
-        .setFriction(0.6)
-        .setRestitution(0.25),
-      FLASHLIGHT_HOLDER.pos.clone(),
-      FLASHLIGHT_HOLDER.quat.clone(),
-    );
-    // paper map (starts folded, inside the glovebox)
-    const m = MAP_SPEC.folded;
-    this.addDynamic(
-      RAPIER.ColliderDesc.cuboid(m.hx, m.hy, m.hz).setMass(MAP_SPEC.mass).setFriction(0.8).setRestitution(0.05),
-      GLOVEBOX_OPENING.clone(),
-      new THREE.Quaternion(),
-    );
-    this.stowFlashlight();
-    this.stowMap();
   }
 
   private addDynamic(desc: RAPIER.ColliderDesc, pos: THREE.Vector3, quat: THREE.Quaternion) {
@@ -209,59 +172,11 @@ export class CabinPhysics {
     this.currQuat[i].copy(quat);
   }
 
-  // --- flashlight holder ------------------------------------------------------------
-
-  /** Clips the flashlight into its dashboard holder (kinematic: it rides with the car). */
-  stowFlashlight() {
-    const i = CABIN_BODY.flashlight;
-    if (this.torch.index === i) this.torch.index = -1;
-    this.bodies[i].setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
-    this.place(i, FLASHLIGHT_HOLDER.pos, FLASHLIGHT_HOLDER.quat);
-    this.flashlightStowed = true;
-  }
-
-  private unstowFlashlight() {
-    if (!this.flashlightStowed) return;
-    this.bodies[CABIN_BODY.flashlight].setBodyType(RAPIER.RigidBodyType.Dynamic, true);
-    this.flashlightStowed = false;
-  }
-
-  // --- glovebox map ------------------------------------------------------------------
-
-  /** The map lives in the closed glovebox: no simulation, no collisions. */
-  stowMap() {
-    const i = CABIN_BODY.map;
-    if (this.main.index === i) this.main.index = -1;
-    this.setMapOpen(false);
-    this.place(i, GLOVEBOX_OPENING.clone().add(new THREE.Vector3(0, 0, -0.12)), new THREE.Quaternion());
-    this.bodies[i].setEnabled(false);
-    this.mapStowed = true;
-  }
-
-  private unstowMap() {
-    if (!this.mapStowed) return;
-    const i = CABIN_BODY.map;
-    this.bodies[i].setEnabled(true);
-    this.place(i, GLOVEBOX_OPENING, new THREE.Quaternion());
-    this.mapStowed = false;
-  }
-
-  /** Opens / folds the paper map: the physical collider changes size too. */
-  setMapOpen(open: boolean) {
-    if (this.mapOpen === open) return;
-    this.mapOpen = open;
-    const s = open ? MAP_SPEC.open : MAP_SPEC.folded;
-    this.colliders[CABIN_BODY.map].setShape(new RAPIER.Cuboid(s.hx, s.hy, s.hz));
-    this.colliders[CABIN_BODY.map].setMass(MAP_SPEC.mass);
-  }
-
   /** Puts everything back to its start position (new stage / reset). */
   reset() {
     this.releaseAll();
     const starts = [LAYOUT.navLap, ...LOOSE_OBJECTS.map((o) => o.start)];
     for (let i = 0; i < starts.length; i++) this.place(i, starts[i], i === 0 ? TABLET_START_QUAT : new THREE.Quaternion());
-    this.stowFlashlight();
-    this.stowMap();
     this.main.grip = 100;
   }
 
@@ -269,18 +184,9 @@ export class CabinPhysics {
     return this.time >= this.regrabBlockedUntil;
   }
 
-  /** Takes an object into the right slot (flashlight -> torch hand, everything else -> main). */
+  /** Takes an object into the hands (dropping whatever was held before). */
   grab(index: number): boolean {
     if (index < 0 || index >= this.bodies.length || !this.canGrab()) return false;
-    if (index === CABIN_BODY.flashlight) {
-      this.unstowFlashlight();
-      this.torch.index = index;
-      this.torch.grip = 100;
-      this.torch.errorTime = 0;
-      this.bodies[index].setGravityScale(0, true);
-      return true;
-    }
-    if (index === CABIN_BODY.map) this.unstowMap();
     if (this.main.index >= 0) this.release('released', false);
     this.main.index = index;
     this.main.grip = 100;
@@ -294,13 +200,8 @@ export class CabinPhysics {
     this.releaseSlot(this.main, reason, notify);
   }
 
-  releaseTorch(reason: DropReason, notify = true) {
-    this.releaseSlot(this.torch, reason, notify);
-  }
-
   releaseAll() {
     this.releaseSlot(this.main, 'released', false);
-    this.releaseSlot(this.torch, 'released', false);
   }
 
   private releaseSlot(slot: HandSlot, reason: DropReason, notify: boolean) {
@@ -317,16 +218,11 @@ export class CabinPhysics {
     this.main.quat.copy(quat);
   }
 
-  setTorchTarget(pos: THREE.Vector3, quat: THREE.Quaternion) {
-    this.torch.pos.copy(pos);
-    this.torch.quat.copy(quat);
-  }
-
   /** Impact shock: `dir` points (car-local) towards where the car was hit. */
   shock(dir: THREE.Vector3, strength: number) {
     const s = Math.min(strength, 16);
     this.bodies.forEach((b, i) => {
-      if (i === this.main.index || i === this.torch.index || !b.isDynamic() || !b.isEnabled()) return;
+      if (i === this.main.index || !b.isDynamic() || !b.isEnabled()) return;
       const lv = b.linvel();
       const k = s * (0.7 + Math.random() * 0.4);
       b.setLinvel({ x: lv.x + dir.x * k, y: lv.y + dir.y * k + s * 0.15, z: lv.z + dir.z * k }, true);
@@ -345,7 +241,6 @@ export class CabinPhysics {
       }
     };
     knock(this.main, this.oneHanded ? 1.6 : 1, () => this.release('impact'));
-    knock(this.torch, 0.6, () => this.releaseTorch('impact'));
   }
 
   private driveSlot(slot: HandSlot, gravity: THREE.Vector3, dt: number, maxV: number) {
@@ -380,19 +275,14 @@ export class CabinPhysics {
     const vert = Math.abs(gravity.y + 9.81);
     const drain = Math.max(0, horiz - 4.6) * 7 + Math.max(0, vert - 6.5) * 5;
     if (this.main.index >= 0) {
-      // grip drains under sustained g-forces; one hand and awkward objects drain faster
-      const k = (this.oneHanded ? 1.7 : 1) * this.awkwardness;
-      const d = drain * k + (this.awkwardness > 1 ? (this.awkwardness - 1) * 4 : 0);
+      // grip drains under sustained g-forces, faster with one hand
+      const d = drain * (this.oneHanded ? 1.7 : 1);
       this.main.grip = clamp(this.main.grip - d * dt + (d === 0 ? 28 * dt : 0), 0, 100);
       if (this.main.grip <= 0) this.release('gforce');
     }
     if (this.main.index >= 0) {
       this.driveSlot(this.main, gravity, dt, 3.2);
       if (this.main.errorTime > 0.45) this.release('snag');
-    }
-    if (this.torch.index >= 0) {
-      this.driveSlot(this.torch, gravity, dt, 4);
-      if (this.torch.errorTime > 0.6) this.releaseTorch('snag');
     }
 
     for (let i = 0; i < this.bodies.length; i++) {
@@ -422,7 +312,6 @@ export class CabinPhysics {
         body.setTranslation({ x: 0.4, y: 0.0, z: -0.4 }, true);
         body.setLinvel({ x: 0, y: 0, z: 0 }, true);
         if (i === this.main.index) this.release('snag');
-        if (i === this.torch.index) this.releaseTorch('snag');
       }
       const r = body.rotation();
       const tt = body.translation();

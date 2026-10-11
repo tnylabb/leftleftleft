@@ -1,5 +1,5 @@
 // Headless physics smoke test: builds a stage's colliders and lets a simple
-// autopilot drive the hatchback along the road. Run: npx tsx scripts/sim-test.ts [seed]
+// autopilot drive the hatchback along the road. Run: npx tsx scripts/sim-test.ts [seed] [countryside|mountain]
 // Verifies the car drives, steers, stays on its wheels and reaches checkpoints.
 
 import RAPIER from '@dimforge/rapier3d-compat';
@@ -15,7 +15,9 @@ import { Vegetation } from '../src/world/Vegetation';
 
 await RAPIER.init();
 const seed = Number(process.argv[2] ?? 42);
-const stage = generateStage({ seed, length: 'short' });
+const map = process.argv[3] === 'mountain' ? 'mountain' : 'countryside';
+const stage = generateStage({ seed, length: 'short', night: false, map });
+console.log(`${map} stage, seed ${seed}: ${stage.totalLength.toFixed(0)} m, ${stage.corners.length} corners`);
 const physics = new PhysicsWorld();
 const field = new TerrainField(stage);
 const t0 = performance.now();
@@ -76,13 +78,14 @@ for (let step = 0; step < 60 * 240; step++) {
   maxSpeed = Math.max(maxSpeed, speed);
   const up = 1 - 2 * (r.x * r.x + r.z * r.z);
   if (up < 0.2) flips++;
-  if (step % 2 === 0) for (const e of tracker.update(t.x, t.z, v.x, v.z, FIXED_DT * 2, time * 1000)) events.push(`t=${time.toFixed(1)} ${JSON.stringify(e)}`);
+  if (step % 2 === 0) for (const e of tracker.update(t.x, t.z, v.x, v.z, FIXED_DT * 2, time * 1000, t.y)) events.push(`t=${time.toFixed(1)} ${JSON.stringify(e)}`);
   // behave like a player: press R when stuck for 4 s (reset to the road like the server does)
   stuckTime = speed < 0.8 && !car.frozen ? stuckTime + FIXED_DT : 0;
   if (stuckTime > 4) {
     stuckTime = 0;
     resets++;
-    const i = Math.max(stage.startIdx, Math.floor(loc.idx) - 3);
+    // same rule as the server: back to where the car legitimately got to
+    const i = Math.max(stage.startIdx, Math.floor(Math.min(loc.idx, tracker.maxIdx)) - 3);
     const h = stage.headings[i];
     car.setPose({ x: stage.xs[i], y: stage.ys[i] + 0.8, z: stage.zs[i], qx: 0, qy: Math.sin(-h / 2), qz: 0, qw: Math.cos(-h / 2) });
     tracker.teleported(stage.xs[i], stage.zs[i], i);

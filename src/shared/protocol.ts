@@ -15,6 +15,8 @@ import type {
   Role,
   RoomSnapshot,
   SeatStates,
+  StageMap,
+  StageParams,
 } from './types';
 
 export interface JoinAck {
@@ -43,7 +45,7 @@ export interface MudReport {
 export interface ServerToClientEvents {
   'room:state': (room: RoomSnapshot) => void;
   'room:kicked': (reason: string) => void;
-  'game:load': (payload: { seed: number; length: StageLength; night: boolean }) => void;
+  'game:load': (payload: StageParams) => void;
   'game:countdown': (payload: { endsAt: number }) => void;
   'game:go': (payload: { startedAt: number }) => void;
   'game:results': (results: RaceResults) => void;
@@ -74,7 +76,7 @@ export interface ClientToServerEvents {
   'room:leave': () => void;
   'lobby:role': (payload: { role: Role | null }) => void;
   'lobby:ready': (payload: { ready: boolean }) => void;
-  'lobby:stage': (payload: { length: StageLength; seed?: number; night?: boolean }) => void;
+  'lobby:stage': (payload: { length: StageLength; seed?: number; night?: boolean; map?: StageMap }) => void;
   'game:loaded': (payload: { hash: number }) => void;
   'game:restart': (payload: { mode: 'retry' | 'new' }) => void;
   'game:toLobby': () => void;

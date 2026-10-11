@@ -215,7 +215,9 @@ export class VehicleController {
     // --- steering (speed sensitive, rate limited) -------------------------------
     const auth = clamp(input.steerAuthority, 0.2, 1);
     const sf = Math.pow(clamp(Math.abs(speedFwd) / 36, 0, 1), 0.8);
-    const maxSteer = lerp(s.maxSteerLow, s.maxSteerHigh, sf) * auth;
+    // a little more lock at low / medium speed, barely more flat out
+    const boost = 1 + s.steerBoostTop + s.steerBoostLow * (1 - sf);
+    const maxSteer = lerp(s.maxSteerLow, s.maxSteerHigh, sf) * boost * auth;
     const target = this.frozen ? input.steer * s.maxSteerLow : input.steer * maxSteer;
     const towardsCentre = Math.abs(target) < Math.abs(this.steerAngle) || Math.sign(target) !== Math.sign(this.steerAngle);
     const rate = (towardsCentre ? s.steerSpeedOut : s.steerSpeedIn) * (0.55 + 0.45 * auth);
@@ -383,6 +385,23 @@ export class VehicleController {
     if (this.extraYawTorque !== 0) {
       _f.copy(_up).multiplyScalar(this.extraYawTorque * dt);
       b.applyTorqueImpulse(_f, true);
+    }
+    // arcade turn-in assist: at low / medium speed, help the nose follow the
+    // steered wheels when the front tyres alone would plough on. It only ever
+    // pulls the yaw rate *up to* the steering geometry, so slides, oversteer
+    // and spins are left entirely to the tyres.
+    if (!this.frozen && (this.wheels[0].grounded || this.wheels[1].grounded) && Math.abs(speedFwd) > 1) {
+      const fade = 1 - clamp((Math.abs(speedFwd) - 14) / 18, 0, 1);
+      if (fade > 0) {
+        const want = (-speedFwd * Math.tan(this.steerAngle)) / s.wheelbase;
+        const yawRate = _w.dot(_up);
+        const err = want - yawRate;
+        if (Math.sign(err) === Math.sign(want) && Math.abs(yawRate) < Math.abs(want)) {
+          const torque = clamp(err * s.turnAssist, -s.turnAssistMax, s.turnAssistMax) * fade;
+          _f.copy(_up).multiplyScalar(torque * dt);
+          b.applyTorqueImpulse(_f, true);
+        }
+      }
     }
 
     // --- air behaviour ------------------------------------------------------------------

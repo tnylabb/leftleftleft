@@ -122,6 +122,7 @@ export class Vegetation {
     const dummy = new THREE.Object3D();
     const tint = new THREE.Color();
     const push = (kind: Kind, x: number, y: number, z: number, scale: number, yaw: number, tilt: number, color: THREE.Color) => {
+      if (!Number.isFinite(y)) return;
       const key = `${Math.floor(x / CHUNK)},${Math.floor(z / CHUNK)}`;
       let b = buckets.get(key);
       if (!b) buckets.set(key, (b = {}));
@@ -136,6 +137,12 @@ export class Vegetation {
         c: color.clone(),
       });
     };
+
+    if (this.field.mountain) {
+      await this.buildMountain(push, density, progress);
+      this.instantiate(buckets);
+      return;
+    }
 
     // candidate area: sample along the road in a band, plus a sparse outer belt
     const visited = new Set<number>();
@@ -229,6 +236,97 @@ export class Vegetation {
     this.instantiate(buckets);
   }
 
+  /**
+   * Mountain: alpine grass, shrubs and scattered conifers on the slopes, lots of
+   * boulders (solid near the road), big rock formations on the inside of
+   * uphill corners (blind corners) and the odd rock right at the road edge.
+   */
+  private async buildMountain(
+    push: (k: Kind, x: number, y: number, z: number, s: number, yaw: number, tilt: number, c: THREE.Color) => void,
+    density: number,
+    progress?: (f: number) => Promise<void> | void,
+  ) {
+    const s = this.field.stage;
+    const seed = s.params.seed;
+    const tint = new THREE.Color();
+    const visited = new Set<number>();
+    const cell = 4.2 / Math.sqrt(density);
+    const band = 120;
+    for (let i = 0; i < s.count; i += 6) {
+      const cx0 = Math.floor((s.xs[i] - band) / cell);
+      const cx1 = Math.floor((s.xs[i] + band) / cell);
+      const cz0 = Math.floor((s.zs[i] - band) / cell);
+      const cz1 = Math.floor((s.zs[i] + band) / cell);
+      for (let gx = cx0; gx <= cx1; gx++) {
+        for (let gz = cz0; gz <= cz1; gz++) {
+          const key = (gx + 32768) * 65536 + (gz + 32768);
+          if (visited.has(key)) continue;
+          visited.add(key);
+          const r = new Rng(hash2(seed ^ key, 177));
+          const x = (gx + r.next()) * cell;
+          const z = (gz + r.next()) * cell;
+          if (Math.hypot(x - s.xs[i], z - s.zs[i]) > band) {
+            visited.delete(key);
+            continue;
+          }
+          const q = this.field.queryRoad(x, z);
+          const hw = q.dist < Infinity ? this.field.halfWidthAt(q.idx) : HW;
+          const d = q.dist;
+          if (d < hw + 1.1) continue;
+          const y = this.field.heightAt(x, z);
+          const roll = r.next();
+          const yaw = r.next() * Math.PI * 2;
+          const grass = () => push('grass', x, y - 0.05, z, 0.7 + r.next() * 0.6, yaw, 0, tint.set(0xe6dfa0).multiplyScalar(0.8 + r.next() * 0.3));
+          if (d < hw + 4) {
+            // road edge: tufts, and now and then a rock that is very much solid
+            if (roll < 0.35) grass();
+            else if (roll < 0.4) this.addRock(push, x, y, z, r, tint, true, 0.45 + r.next() * 0.5);
+            continue;
+          }
+          if (roll < 0.05) this.addRock(push, x, y, z, r, tint, d < 45, 0.6 + r.next() * 1.4);
+          else if (roll < 0.11) this.addBush(push, x, y, z, r, tint, 0.8);
+          else if (roll < 0.11 + 0.07) this.addTree(push, true, x, y, z, r, tint, d);
+          else if (roll < 0.5 && d < 60) grass();
+        }
+      }
+      if (i % 120 === 0) await progress?.((i / s.count) * 0.9);
+    }
+    // rock formations on the inside of corners where the mountain rises: you can't see round them
+    for (const c of s.corners) {
+      if (c.severity === 'keep' || c.severity === 'easy') continue;
+      const i = c.apexIdx;
+      const h = s.headings[i];
+      const side = c.dir; // +1 right turn: the inside is on the right
+      const hw = s.halfWidths[i];
+      const probe = (l: number) => this.field.heightAt(s.xs[i] + Math.cos(h) * side * l, s.zs[i] + Math.sin(h) * side * l);
+      if (probe(hw + 5) < s.ys[i] + 1.5) continue; // inside drops away: nothing to hide behind
+      const r = new Rng(hash2(seed, 7000 + c.id));
+      const n = r.int(2, 4);
+      for (let k = 0; k < n; k++) {
+        const j = Math.max(0, Math.min(s.count - 1, i + r.int(-5, 5)));
+        const hj = s.headings[j];
+        const size = 1.8 + r.next() * 1.6;
+        // keep the solid part clear of the road surface
+        const l = side * (s.halfWidths[j] + 1.0 + size * 0.85 + r.next() * 1.8);
+        const x = s.xs[j] + Math.cos(hj) * l;
+        const z = s.zs[j] + Math.sin(hj) * l;
+        this.addRock(push, x, this.field.heightAt(x, z) + 0.6, z, r, tint, true, size);
+      }
+    }
+    // marker posts on the safe side of the road only
+    for (let i = s.startIdx + 10; i < s.finishIdx; i += 18) {
+      const h = s.headings[i];
+      for (const side of [-1, 1]) {
+        const l = side * (s.halfWidths[i] + 0.95);
+        const x = s.xs[i] + Math.cos(h) * l;
+        const z = s.zs[i] + Math.sin(h) * l;
+        const y = this.field.heightAt(x, z);
+        if (Math.abs(y - s.ys[i]) < 0.6) push('post', x, y - 0.1, z, 1, -h, 0, tint.set(0xffffff));
+      }
+    }
+    await progress?.(1);
+  }
+
   private addTree(
     push: (k: Kind, x: number, y: number, z: number, s: number, yaw: number, tilt: number, c: THREE.Color) => void,
     conifer: boolean, x: number, y: number, z: number, r: Rng, tint: THREE.Color, d: number,
@@ -260,9 +358,9 @@ export class Vegetation {
 
   private addRock(
     push: (k: Kind, x: number, y: number, z: number, s: number, yaw: number, tilt: number, c: THREE.Color) => void,
-    x: number, y: number, z: number, r: Rng, tint: THREE.Color, collide: boolean,
+    x: number, y: number, z: number, r: Rng, tint: THREE.Color, collide: boolean, size?: number,
   ) {
-    const scale = 0.5 + r.next() * 0.9;
+    const scale = size ?? 0.5 + r.next() * 0.9;
     tint.setRGB(1, 1, 1).multiplyScalar(0.85 + r.next() * 0.25);
     push('rock', x, y - 0.25 * scale, z, scale, r.next() * Math.PI * 2, r.next() * 0.4, tint);
     this.addObstacle(x, z, 0.7 * scale);

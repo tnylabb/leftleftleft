@@ -14,7 +14,9 @@ import type { RoomSnapshot } from '../src/shared/types';
 
 type S = Socket<ServerToClientEvents, ClientToServerEvents>;
 const url = process.argv[2] ?? `http://localhost:${process.env.GAME_PORT ?? 3001}`;
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// extra wait per step for remote servers: NET_TEST_LATENCY_MS=400 npx tsx scripts/net-test.ts <url>
+const LATENCY = Number(process.env.NET_TEST_LATENCY_MS ?? 0);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms + LATENCY));
 let failures = 0;
 const check = (ok: boolean, msg: string) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${msg}`);
