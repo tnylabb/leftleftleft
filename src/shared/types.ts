@@ -119,7 +119,9 @@ export type RaceEvent =
   | { type: 'wrongWay'; active: boolean }
   | { type: 'crash'; strength: number }
   | { type: 'finish'; timeMs: number }
-  | { type: 'stuck'; flipped: boolean };
+  | { type: 'stuck'; flipped: boolean }
+  /** The car fell off the road / out of the map and is being put back at the last checkpoint. */
+  | { type: 'fellOff' };
 
 /** Which occupants are sitting in the car (false = out on foot). */
 export interface SeatStates {

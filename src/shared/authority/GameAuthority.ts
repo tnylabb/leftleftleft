@@ -72,6 +72,11 @@ const ALLOWED_CALLOUTS: CalloutId[] = [
   'missed', 'accelerating', 'jump', 'wrongWay', 'dropped', 'nice', 'ouch', 'note',
 ];
 
+/** Off the road and this far (m) below it counts as fallen off. */
+const FELL_OFF_DEPTH = 4.5;
+/** How long the car may lie there before it is put back at the last checkpoint. */
+const FELL_OFF_SECONDS = 2.5;
+
 export class GameAuthority {
   readonly tracker: RaceTracker;
   private phase: Phase = 'countdown';
@@ -113,6 +118,8 @@ export class GameAuthority {
   private stuckHinted = false;
   private offRouteTime = 0;
   private offRouteHinted = false;
+  /** Seconds the car has been off the road and well below it (fallen off). */
+  private fallenTime = 0;
 
   constructor(
     private stage: StageData,
@@ -369,6 +376,18 @@ export class GameAuthority {
       this.issueReset(true);
     }
 
+    // fell off the road / out of the map: after a moment, back to the last checkpoint
+    const lt = this.tracker.loc;
+    const hw = this.stage.halfWidths[Math.max(0, Math.min(this.stage.count - 1, Math.round(lt.idx)))];
+    const fallen = Math.abs(lt.lateral) > hw + 1 && lt.roadY - buf[CAR.py] > FELL_OFF_DEPTH;
+    this.fallenTime = fallen ? this.fallenTime + dt : 0;
+    if (this.fallenTime > FELL_OFF_SECONDS) {
+      this.fallenTime = 0;
+      this.out.raceEvent({ type: 'fellOff' });
+      this.issueReset(false, true);
+      return;
+    }
+
     // fell (or drove) onto a stretch of road the car hasn't got to yet: it doesn't count
     if (this.tracker.offRoute) this.offRouteTime += dt;
     else {
@@ -398,7 +417,7 @@ export class GameAuthority {
     return true;
   }
 
-  private issueReset(penalize = false) {
+  private issueReset(penalize = false, toCheckpoint = false) {
     const s = this.stage;
     this.lastResetAt = this.now();
     if (penalize) {
@@ -413,7 +432,11 @@ export class GameAuthority {
     let i: number;
     if (this.phase === 'countdown' || !this.lastState) i = s.startIdx;
     // never further than the car has legitimately driven (no shortcuts by falling off the mountain)
-    else i = Math.max(s.startIdx, Math.min(s.finishIdx - 2, Math.floor(Math.min(this.tracker.loc.idx, this.tracker.maxIdx)) - 3));
+    else if (toCheckpoint) {
+      // the last checkpoint the car has passed (or the start line)
+      const cp = this.tracker.nextCheckpoint > 0 ? s.checkpoints[this.tracker.nextCheckpoint - 1] : null;
+      i = cp ? cp.idx : s.startIdx;
+    } else i = Math.max(s.startIdx, Math.min(s.finishIdx - 2, Math.floor(Math.min(this.tracker.loc.idx, this.tracker.maxIdx)) - 3));
     // never reset onto a jump ramp
     for (const j of s.jumps) if (i > j.idx - 9 && i < j.idx + 8) i = j.idx - 10;
     const h = s.headings[i];
@@ -425,6 +448,7 @@ export class GameAuthority {
     this.stuckHinted = false;
     this.offRouteTime = 0;
     this.offRouteHinted = false;
+    this.fallenTime = 0;
     this.out.teleport(pose);
   }
 

@@ -280,16 +280,19 @@ No key is shared between the two players:
 - **Falling off the mountain** is plain physics: there are no invisible walls. Leave the road on the drop
   side and the car goes over, tumbles, bounces and slides down the terrain colliders, hitting rocks and
   trees, and may come to rest on a bench or a lower bend - or slide all the way to the valley. Both players
-  feel the same crash (it's the one shared car). Where it lands, the tow-hook recovery still works if the
-  terrain allows; otherwise hold `R`.
+  feel the same crash (it's the one shared car).
+- **Fell off? Back to the checkpoint**: once the car is off the road and more than 4.5 m below it (over the
+  edge, or out of the map), the authority waits 2.5 s and then puts it back on the road at the last
+  checkpoint passed (or the start line) - for both players at once. No extra time penalty: the lost ground
+  is the price. (The tow-hook recovery is still there for a car that's stuck but hasn't fallen off.)
 - **Over-the-edge camera**: once the car has left the road and dropped well below it, both occupants' views
   ease out into a third-person camera that hangs above and uphill of the car and follows the tumble (it
   never rolls with the car, stays clear of the hillside and boulders, and pulls in when trees would hide
   the car). Back to the cockpit once the car has settled, when it's reset onto the road, or after 14 s.
   Decided locally from the shared car state, so it's purely visual.
 - **No shortcuts**: progress, checkpoints and the finish only count on the road's level and within reach of
-  where the car has legitimately driven to. A car that falls onto a lower bend gets an "off your route" hint
-  and the emergency reset puts it back where it left the road (never further on).
+  where the car has legitimately driven to. A car that falls onto a lower bend (and stays on that road)
+  gets an "off your route" hint, and the emergency reset puts it back where it left the road (never further on).
 - Corner analysis from the real curvature: KEEP / EASY / (medium) / HARD / HAIRPIN LEFT/RIGHT with target
   speeds, "into" chains, braking-distance based BRAKE NOW, jump warnings.
 - Race tracking: checkpoints (+10 s penalty if skipped), missed turns, wrong way, finish, odometer, top
