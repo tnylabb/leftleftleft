@@ -8,6 +8,8 @@ import type { RaceResults, Role, RoomSnapshot } from '../shared/types';
 import type { ConnectionStatus } from '../multiplayer/Session';
 import type { VoiceState } from '../multiplayer/VoiceChat';
 import { NAV_HOTKEYS, CALLOUT_TEXT } from '../navigation/Callouts';
+import type { BindMode } from '../core/Bindings';
+import { referenceHtml, type Row } from './controlsHelp';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
@@ -27,6 +29,14 @@ export interface HudData {
   grip: number | null;
   warn: string | null;
   hover: { text: string; x: number; y: number } | null;
+  /** Rows for the hold-Tab controls overlay (null = Tab not held). */
+  tab: Row[] | null;
+  /** 0..1 progress of holding the emergency-reset key. */
+  resetHold: number;
+  /** 0..1 flashlight glare (driver only). */
+  glare: number;
+  /** Driver / navigator view is showing an on-foot camera. */
+  onFoot: boolean;
 }
 
 const fmtTime = (ms: number) => {
@@ -35,25 +45,6 @@ const fmtTime = (ms: number) => {
   return `${m}:${(t % 60).toFixed(2).padStart(5, '0')}`;
 };
 
-export const DRIVER_HELP = `
-  <kbd>W</kbd>/<kbd>↑</kbd> throttle &nbsp; <kbd>S</kbd>/<kbd>↓</kbd> brake / reverse<br>
-  <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer &nbsp; <kbd>Space</kbd> handbrake<br>
-  <kbd>V</kbd> wipers &nbsp; hold <kbd>C</kbd> wipe windscreen by hand<br>
-  <kbd>G</kbd> close your door &nbsp; <kbd>H</kbd> horn &nbsp; <kbd>R</kbd> reset car<br>
-  Click + mouse: look around (glance at the tablet!)<br>
-  Manual gearbox (settings): <kbd>Shift</kbd>/<kbd>E</kbd> up, <kbd>Ctrl</kbd>/<kbd>Q</kbd> down`;
-
-export const NAV_HELP = `
-  <kbd>Left click</kbd> grab / release tablet or objects<br>
-  Move mouse: move held tablet &nbsp; <kbd>Wheel</kbd> closer / farther<br>
-  <kbd>Q</kbd><kbd>E</kbd> turn tablet &nbsp; <kbd>Z</kbd><kbd>X</kbd> tilt &nbsp; <kbd>Middle drag</kbd> rotate<br>
-  <kbd>F</kbd> pick up tablet (hold to lean further) &nbsp; <kbd>G</kbd> close your door<br>
-  Hold <kbd>Right mouse</kbd> look around<br>
-  <kbd>1</kbd>-<kbd>0</kbd> shout callouts &nbsp; <kbd>Space</kbd> read next pace note aloud`;
-
-export const COUCH_HELP = `
-  <b>Driver</b> (left screen): <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>, <kbd>Space</kbd>, <kbd>V</kbd>/<kbd>C</kbd>/<kbd>G</kbd>/<kbd>H</kbd>/<kbd>R</kbd>, glance <kbd>Q</kbd>/<kbd>E</kbd><br>
-  <b>Navigator</b> (right screen): mouse, <kbd>←</kbd><kbd>→</kbd> turn, <kbd>↑</kbd><kbd>↓</kbd> tilt, <kbd>F</kbd> pick up, <kbd>1</kbd>-<kbd>0</kbd> shout, <kbd>Enter</kbd> read note`;
 
 export class UI {
   readonly root: HTMLElement;
@@ -63,7 +54,7 @@ export class UI {
   private hudViews: HTMLElement[] = [];
   private subtitleTimer = 0;
   private hintTimer = 0;
-  private controlsFade = 0;
+
   private lastHudKeys: string[] = [];
 
   constructor(
@@ -79,6 +70,7 @@ export class UI {
       <div id="hud"></div>
       <div id="subtitle"></div>
       <div id="countdown"></div>
+      <div id="cinematic"><div class="bar top"></div><div class="bar bottom"></div><div class="title"></div></div>
       <div id="toasts"></div>
       <div id="hint"></div>
       <div id="banner"></div>
@@ -125,7 +117,7 @@ export class UI {
   }
 
   // --- menu ------------------------------------------------------------------
-  renderMenu(opts: { server: ConnectionStatus | 'checking'; seat: string | null; length: StageLength; error?: string }) {
+  renderMenu(opts: { server: ConnectionStatus | 'checking'; seat: string | null; length: StageLength; night: boolean; error?: string }) {
     const s = this.screens.get('menu')!;
     const name = esc(this.settings.data.name);
     const statusText =
@@ -154,6 +146,7 @@ export class UI {
           </div>
           <div class="row" style="margin-top:6px"><span class="muted small">Local stage length:</span>
             <div class="seg">${lenBtn('short', 'SHORT')}${lenBtn('medium', 'MEDIUM')}${lenBtn('long', 'LONG')}</div>
+            <div class="seg"><button class="btn small ${!opts.night ? 'selected' : ''}" data-action="time" data-night="0"><span>DAY</span></button><button class="btn small ${opts.night ? 'selected' : ''}" data-action="time" data-night="1"><span>NIGHT</span></button></div>
           </div>
           <button class="btn" data-action="couch"><span>COUCH CO-OP · SPLIT SCREEN<span class="sub">Two players, one keyboard + mouse (local dev mode)</span></span></button>
           <button class="btn" data-action="solo"><span>SOLO PRACTICE<span class="sub">You drive, an AI co-driver reads the notes</span></span></button>
@@ -220,6 +213,7 @@ export class UI {
         <div class="row" style="margin-top:14px">
           <span class="muted small">Stage length${host ? '' : ' (host decides)'}:</span>
           <div class="seg">${len('short', 'SHORT')}${len('medium', 'MEDIUM')}${len('long', 'LONG')}</div>
+          <div class="seg"><button class="btn small ${!room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="0" ${host ? '' : 'disabled'}><span>DAY</span></button><button class="btn small ${room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="1" ${host ? '' : 'disabled'}><span>NIGHT</span></button></div>
           <span class="muted small">seed ${room.stage.seed}</span>
           ${host ? `<button class="btn small dark" data-action="reroll"><span>NEW ROAD</span></button>` : ''}
         </div>
@@ -248,9 +242,10 @@ export class UI {
   }
 
   // --- HUD -----------------------------------------------------------------------
-  setupHud(views: HudView[], mode: 'online' | 'couch' | 'solo') {
+  setupHud(views: HudView[]) {
     this.hud.innerHTML = '';
     this.lastHudKeys = [];
+    this.lastTabKeys = [];
     this.hudViews = views.map((v) => {
       const el = document.createElement('div');
       el.className = 'hud-view';
@@ -258,23 +253,24 @@ export class UI {
       el.style.top = `${(1 - v.rect.y - v.rect.h) * 100}%`;
       el.style.width = `${v.rect.w * 100}%`;
       el.style.height = `${v.rect.h * 100}%`;
-      const help = mode === 'couch' ? '' : v.role === 'driver' ? DRIVER_HELP : NAV_HELP;
       const callouts =
         v.role === 'navigator'
-          ? `<div class="hud-callouts">${NAV_HOTKEYS.map((h) => `<kbd>${h.key}</kbd> ${h.id === 'other' ? 'NO, THE OTHER…' : CALLOUT_TEXT[h.id]}`).join('<br>')}</div>`
+          ? `<div class="tab-callouts"><h4>CALLOUTS</h4>${NAV_HOTKEYS.map((h) => `<kbd>${h.key}</kbd> ${h.id === 'other' ? 'NO, THE OTHER…' : CALLOUT_TEXT[h.id]}`).join('<br>')}</div>`
           : '';
       el.innerHTML = `
+        ${v.role === 'driver' ? '<div class="hud-glare"></div>' : ''}
         <div class="hud-role ${v.role}">${v.role.toUpperCase()}</div>
         <div class="hud-time"><span class="t">0:00.00</span><span class="cp"></span></div>
         <div class="hud-status"></div>
         <div class="hud-warn"></div>
         ${v.role === 'driver' ? `<div class="hud-speed"><span class="v">0</span><span class="g">1</span><div class="u">KM/H</div></div>` : ''}
-        ${v.role === 'navigator' ? `<div class="hud-grip">GRIP<div class="track"><div class="fill" style="width:100%"></div></div></div><div class="hud-hover"></div>${callouts}` : ''}
-        <div class="hud-controls">${mode === 'couch' ? COUCH_HELP : help}<br><span class="muted">Esc: pause · F1: toggle help</span></div>`;
+        ${v.role === 'navigator' ? `<div class="hud-grip">GRIP<div class="track"><div class="fill" style="width:100%"></div></div></div><div class="hud-hover"></div>` : ''}
+        ${v.role === 'driver' ? `<div class="hud-reset">EMERGENCY RESET<div class="track"><div class="fill"></div></div></div>` : ''}
+        <div class="hud-tabhint">hold <kbd>Tab</kbd> for controls</div>
+        <div class="hud-tab"><div class="tab-panel"><h4>${v.role.toUpperCase()} CONTROLS</h4><div class="tab-rows"></div></div>${callouts}</div>`;
       this.hud.appendChild(el);
       return el;
     });
-    this.controlsFade = 14;
     this.hud.classList.add('show');
   }
 
@@ -285,18 +281,17 @@ export class UI {
     this.countdown(null);
     this.banner(null);
     this.hint(null);
+    this.cinematic(null);
     (this.root.querySelector('#subtitle') as HTMLElement).classList.remove('show');
   }
 
-  toggleControlsHelp() {
-    this.controlsFade = this.controlsFade > 0 ? 0 : 1e9;
-  }
+  private lastTabKeys: string[] = [];
 
   updateHud(dt: number, index: number, d: HudData) {
     const el = this.hudViews[index];
     if (!el) return;
     const q = (sel: string) => el.querySelector(sel) as HTMLElement | null;
-    const key = `${Math.round(d.speedKmh)}|${d.gear}|${Math.floor(d.timeMs / 10)}|${d.cp}|${d.status}|${d.grip !== null ? Math.round(d.grip) : ''}|${d.warn}`;
+    const key = `${Math.round(d.speedKmh)}|${d.gear}|${Math.floor(d.timeMs / 10)}|${d.cp}|${d.status}|${d.grip !== null ? Math.round(d.grip) : ''}|${d.warn}|${d.onFoot}`;
     if (key !== this.lastHudKeys[index]) {
       this.lastHudKeys[index] = key;
       const t = q('.hud-time .t');
@@ -307,6 +302,8 @@ export class UI {
       if (v) v.textContent = String(Math.round(d.speedKmh));
       const g = q('.hud-speed .g');
       if (g) g.textContent = d.gear === -1 ? 'R' : d.gear === 0 ? 'N' : String(d.gear);
+      const sp = q('.hud-speed');
+      if (sp) sp.style.display = d.onFoot ? 'none' : '';
       const st = q('.hud-status');
       if (st) {
         st.textContent = d.status ?? '';
@@ -318,7 +315,7 @@ export class UI {
         grip.style.background = d.grip < 35 ? 'var(--red)' : 'var(--yellow)';
       }
       const gw = q('.hud-grip');
-      if (gw) gw.style.opacity = d.grip === null ? '0.35' : '1';
+      if (gw) gw.style.opacity = d.onFoot ? '0' : d.grip === null ? '0.35' : '1';
       const w = q('.hud-warn');
       if (w) {
         w.textContent = d.warn ?? '';
@@ -334,18 +331,46 @@ export class UI {
         hov.style.top = `${d.hover.y}px`;
       } else hov.style.display = 'none';
     }
+    // hold-Tab controls overlay (does not pause the game)
+    const tab = q('.hud-tab');
+    if (tab) {
+      tab.classList.toggle('show', !!d.tab);
+      const hint = q('.hud-tabhint');
+      if (hint) hint.style.display = d.tab ? 'none' : '';
+      const callouts = q('.tab-callouts');
+      if (callouts) callouts.style.display = d.onFoot ? 'none' : ''; // shouting callouts only works from the seat
+      if (d.tab) {
+        const tk = d.tab.map((r) => r.join('|')).join('/');
+        if (tk !== this.lastTabKeys[index]) {
+          this.lastTabKeys[index] = tk;
+          q('.tab-rows')!.innerHTML = d.tab.map(([k, a]) => `<div class="tab-row"><kbd>${esc(k)}</kbd><span>${esc(a)}</span></div>`).join('');
+        }
+      }
+    }
+    const reset = q('.hud-reset');
+    if (reset) {
+      reset.style.display = d.resetHold > 0 ? 'block' : 'none';
+      (reset.querySelector('.fill') as HTMLElement).style.width = `${Math.round(d.resetHold * 100)}%`;
+    }
+    const glare = q('.hud-glare');
+    if (glare) glare.style.opacity = d.glare.toFixed(3);
     if (index === 0) {
-      this.controlsFade -= dt;
       this.subtitleTimer -= dt;
       this.hintTimer -= dt;
       if (this.subtitleTimer <= 0) (this.root.querySelector('#subtitle') as HTMLElement).classList.remove('show');
       if (this.hintTimer <= 0) this.hint(null);
     }
-    const helpOpacity = this.controlsFade > 0 ? '1' : '0';
-    const ctl = q('.hud-controls');
-    if (ctl) ctl.style.opacity = helpOpacity;
-    const co = q('.hud-callouts');
-    if (co) co.style.opacity = helpOpacity;
+  }
+
+  /** Cinematic finish overlay: letterbox bars + title (null hides it). */
+  cinematic(title: string | null, sub = '') {
+    const el = this.root.querySelector('#cinematic') as HTMLElement;
+    if (!title) {
+      el.classList.remove('show');
+      return;
+    }
+    (el.querySelector('.title') as HTMLElement).innerHTML = `${esc(title)}<span class="sub">${esc(sub)}</span>`;
+    el.classList.add('show');
   }
 
   subtitle(text: string, from: string, auto: boolean) {
@@ -408,6 +433,7 @@ export class UI {
   // --- pause / help / settings -------------------------------------------------
   renderPause(mode: 'online' | 'couch' | 'solo', online: boolean) {
     const s = this.screens.get('pause')!;
+    const bind: BindMode = mode === 'couch' ? 'couch' : 'single';
     s.innerHTML = `
       <div class="panel modal-wide stack">
         <h2 class="tape">PAUSED${online ? ' <span class="small">(the stage keeps running online!)</span>' : ''}</h2>
@@ -418,10 +444,10 @@ export class UI {
           <button class="btn dark" data-action="quit"><span>${mode === 'online' ? 'LEAVE SESSION' : 'MAIN MENU'}</span></button>
         </div>
         <div class="help">
-          <div><h3>DRIVER</h3>${DRIVER_HELP}</div>
-          <div><h3>NAVIGATOR</h3>${NAV_HELP}</div>
+          <div><h3>DRIVER${mode === 'couch' ? ' (LEFT SCREEN)' : ''}</h3>${referenceHtml('driver', bind)}</div>
+          <div><h3>NAVIGATOR${mode === 'couch' ? ' (RIGHT SCREEN)' : ''}</h3>${referenceHtml('navigator', bind)}</div>
         </div>
-        ${mode === 'couch' ? `<div class="help"><div><h3>SPLIT SCREEN</h3>${COUCH_HELP}</div></div>` : ''}
+        <p class="muted small">In game, hold <kbd>Tab</kbd> for the controls that apply right now.</p>
       </div>`;
   }
 
@@ -435,14 +461,18 @@ export class UI {
         a real object in a bouncing car. Hard corners and crashes will knock it out of their hands. Pick it up again and keep
         calling the turns. Hit every checkpoint and reach the finish. Crashes, missed turns and missed checkpoints all count.</p>
         <p class="muted">Use voice chat (built-in, Discord, or just shout across the room). The navigator can also hit the
-        number keys to shout preset callouts, or Space to read the next pace note aloud.</p>
+        number keys to shout preset callouts, read the next pace note aloud, or physically point the way.</p>
         <div class="help">
-          <div><h3>DRIVER</h3>${DRIVER_HELP}</div>
-          <div><h3>NAVIGATOR</h3>${NAV_HELP}</div>
+          <div><h3>DRIVER</h3>${referenceHtml('driver', 'single')}</div>
+          <div><h3>NAVIGATOR</h3>${referenceHtml('navigator', 'single')}</div>
         </div>
-        <div class="help"><div><h3>CABIN CHAOS</h3>Mud puddles splatter the windscreen: wipers clear their arcs, hand-wipe the
-        corners. Big hits can unlatch a door - it will swing around and drag the car until you close it. Loose objects fly.</div>
-        <div><h3>SPLIT SCREEN</h3>${COUCH_HELP}</div></div>
+        <div class="help"><div><h3>CABIN CHAOS</h3>Mud puddles splatter the windscreen: each press of the wiper key gives one sweep
+        that only clears its arc, so hand-wipe the corners. Big hits can unlatch a door - it swings around and drags the car until
+        you close it. Loose objects fly. At night the tablet's screen is only readable in the flashlight beam - and don't blind
+        your driver with it.</div>
+        <div><h3>STUCK?</h3>If the car is stuck, stop, get out and grab a tow hook (front or rear bumper). Walk away from the car
+        while holding on to pull it free - pull together for more force, and pull along the car rather than sideways. The
+        emergency reset is a last resort and costs 5 seconds. Split screen uses separate keys for each player: see the pause menu.</div></div>
         <div class="row"><button class="btn primary" data-action="close-help"><span>GOT IT</span></button></div>
       </div>`;
   }
@@ -475,7 +505,6 @@ export class UI {
           ${check('tts', 'Spoken callouts (text-to-speech)')}
           ${check('subtitles', 'Callout subtitles')}
           ${check('autoCallouts', 'Automatic reaction callouts')}
-          ${check('manualGearbox', 'Manual gearbox')}
           ${check('pushToTalk', 'Voice chat push-to-talk (T)')}
           ${check('showFps', 'Show FPS')}
         </div>
@@ -523,6 +552,7 @@ export class UI {
           ${stat('Missed turns', String(r.missedTurns))}
           ${stat('Checkpoints', `${r.checkpointsHit}/${r.checkpointsTotal}`)}
           ${stat('Tablet drops', String(r.tabletDrops))}
+          ${stat('Emergency resets', String(r.resets ?? 0))}
           ${stat('Stage seed', String(r.seed))}
         </div>
         ${voteInfo}

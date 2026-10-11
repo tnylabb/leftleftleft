@@ -58,7 +58,7 @@ for (let step = 0; step < 60 * 240; step++) {
   while (err < -Math.PI) err += Math.PI * 2;
   target.steer = Math.max(-1, Math.min(1, err * 2.2));
   // brake for upcoming corners
-  let targetSpeed = 30;
+  let targetSpeed = 42;
   for (const c of stage.corners) {
     const d = (c.entryIdx - loc.idx) * ROAD_SAMPLE_SPACING;
     if (d > -10 && d < 80 && c.exitIdx > loc.idx) targetSpeed = Math.min(targetSpeed, c.targetSpeed * 0.85 + d * 0.12);
@@ -66,7 +66,7 @@ for (let step = 0; step < 60 * 240; step++) {
   const throttle = speed < targetSpeed ? 1 : 0;
   const brake = speed > targetSpeed + 2 ? 0.7 : 0;
   car.frozen = step < 60;
-  car.preStep({ throttle, brake, steer: target.steer, handbrake: false, shiftUp: false, shiftDown: false, manual: false, steerAuthority: 1 }, FIXED_DT);
+  car.preStep({ throttle, brake, steer: target.steer, handbrake: false, neutral: false, steerAuthority: 1 }, FIXED_DT);
   physics.step();
   car.postStep(FIXED_DT);
   impacts += car.impacts.length;

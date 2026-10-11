@@ -28,6 +28,12 @@ export class CarRenderState {
   readonly compression = [0.09, 0.09, 0.09, 0.09];
   readonly spin = [0, 0, 0, 0];
   limiter = false;
+  /** Driver on foot (world space), from the car snapshot. */
+  readonly footPos = new THREE.Vector3();
+  footYaw = 0;
+  footPitch = 0;
+  footGrip = -1;
+  footWalk = 0;
   valid = false;
 
   get speed(): number {
@@ -65,7 +71,7 @@ export class CarRenderState {
     if (v.wheelspin) flags |= CAR_FLAG.wheelspin;
     if (v.drivetrain.shiftTimer > 0) flags |= CAR_FLAG.shifting;
     if (v.wheels.every((w) => !w.grounded)) flags |= CAR_FLAG.airborne;
-    this.flags = (this.flags & (CAR_FLAG.horn | CAR_FLAG.wiping | CAR_FLAG.closingDoor | CAR_FLAG.wipers)) | flags;
+    this.flags = (this.flags & (CAR_FLAG.horn | CAR_FLAG.wiping | CAR_FLAG.closingDoor | CAR_FLAG.driverOut)) | flags;
     for (let i = 0; i < 4; i++) {
       this.compression[i] = v.wheels[i].compression;
       this.spin[i] = v.wheels[i].spin;
@@ -92,7 +98,12 @@ export class CarRenderState {
     this.rough = b[CAR.rough];
     this.wipeU = b[CAR.wipeU];
     this.wipeV = b[CAR.wipeV];
-    this.limiter = this.rpm > 6950 && this.throttle > 0.5;
+    this.limiter = this.rpm > 7350 && this.throttle > 0.5;
+    this.footPos.set(b[CAR.footX], b[CAR.footY], b[CAR.footZ]);
+    this.footYaw = b[CAR.footYaw];
+    this.footPitch = b[CAR.footPitch];
+    this.footGrip = Math.round(b[CAR.footGrip]);
+    this.footWalk = b[CAR.footWalk];
     // approximate wheel visuals for the remote car
     const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(this.quat);
     const vf = this.vel.dot(fwd);
@@ -135,5 +146,12 @@ export class CarRenderState {
     out[CAR.wipeU] = this.wipeU;
     out[CAR.wipeV] = this.wipeV;
     out[CAR.seq] = seq;
+    out[CAR.footX] = this.footPos.x;
+    out[CAR.footY] = this.footPos.y;
+    out[CAR.footZ] = this.footPos.z;
+    out[CAR.footYaw] = this.footYaw;
+    out[CAR.footPitch] = this.footPitch;
+    out[CAR.footGrip] = this.footGrip;
+    out[CAR.footWalk] = this.footWalk;
   }
 }

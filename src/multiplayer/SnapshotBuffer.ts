@@ -130,6 +130,7 @@ export const interpolateCar: InterpFn = (a, b, alpha, dt, out) => {
   out[CAR.gear] = b[CAR.gear];
   out[CAR.flags] = b[CAR.flags];
   out[CAR.seq] = b[CAR.seq];
+  out[CAR.footGrip] = b[CAR.footGrip];
 };
 
 /** Generic pose-array interpolation: [time, ..., (px,py,pz,qx,qy,qz,qw) blocks at given offsets]. */

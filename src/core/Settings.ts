@@ -18,7 +18,6 @@ export interface SettingsData {
   tts: boolean;
   autoCallouts: boolean;
   subtitles: boolean;
-  manualGearbox: boolean;
   showFps: boolean;
   recenterView: boolean;
   pushToTalk: boolean;
@@ -40,7 +39,6 @@ const DEFAULTS: SettingsData = {
   tts: true,
   autoCallouts: true,
   subtitles: true,
-  manualGearbox: false,
   showFps: false,
   recenterView: true,
   pushToTalk: false,

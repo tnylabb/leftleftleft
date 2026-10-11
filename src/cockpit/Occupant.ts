@@ -18,6 +18,17 @@ function limbGeometry(): THREE.BufferGeometry {
   return g;
 }
 
+/** Fist with the index finger extended along +Z (the pointing direction). */
+function pointingHandGeometry(glove: number, cuff: number): THREE.BufferGeometry {
+  return new GeoBuilder()
+    .add(new THREE.BoxGeometry(0.08, 0.04, 0.085), glove, mat(0, -0.004, 0.042), { shade: 0.1 })
+    .add(new THREE.BoxGeometry(0.07, 0.04, 0.035), glove, mat(0.004, -0.02, 0.085, 0.6, 0, 0), { shade: 0.1 })
+    .add(new THREE.BoxGeometry(0.019, 0.019, 0.085), glove, mat(-0.026, 0.004, 0.12), { shade: 0.1 })
+    .add(new THREE.BoxGeometry(0.024, 0.026, 0.05), glove, mat(0.044, 0.004, 0.05, 0, -0.4, 0.3), { shade: 0.1 })
+    .add(new THREE.BoxGeometry(0.075, 0.05, 0.03), cuff, mat(0, 0, -0.005))
+    .build();
+}
+
 function handGeometry(glove: number, cuff: number): THREE.BufferGeometry {
   return new GeoBuilder()
     .add(new THREE.BoxGeometry(0.085, 0.032, 0.09), glove, mat(0, 0, 0.045), { shade: 0.1 })
@@ -32,6 +43,8 @@ export class Arm {
   readonly fore: THREE.Mesh;
   readonly elbowJoint: THREE.Mesh;
   readonly hand: THREE.Mesh;
+  readonly pointHand: THREE.Mesh;
+  private pointing = false;
   readonly wrist = new THREE.Vector3();
   readonly elbow = new THREE.Vector3();
 
@@ -43,13 +56,31 @@ export class Arm {
     const hg = handGeometry(glove, cuff);
     if (mirror) hg.scale(-1, 1, 1);
     this.hand = new THREE.Mesh(hg, vertexColored({ side: THREE.DoubleSide }));
-    parent.add(this.upper, this.fore, this.elbowJoint, this.hand);
+    const pg = pointingHandGeometry(glove, cuff);
+    if (mirror) pg.scale(-1, 1, 1);
+    this.pointHand = new THREE.Mesh(pg, vertexColored({ side: THREE.DoubleSide }));
+    this.pointHand.visible = false;
+    parent.add(this.upper, this.fore, this.elbowJoint, this.hand, this.pointHand);
   }
 
   /**
    * Solves a two-bone IK chain from `shoulder` to `target`, bending towards `pole`.
    * `handUp` is the direction the back of the hand should face.
    */
+  /** Swaps the gripping hand for the index-finger pointing hand. */
+  setPointing(on: boolean) {
+    if (on === this.pointing) return;
+    this.pointing = on;
+    this.hand.visible = !on;
+    this.pointHand.visible = on;
+  }
+
+  setVisible(v: boolean) {
+    this.upper.visible = this.fore.visible = this.elbowJoint.visible = v;
+    this.hand.visible = v && !this.pointing;
+    this.pointHand.visible = v && this.pointing;
+  }
+
   solve(shoulder: THREE.Vector3, target: THREE.Vector3, pole: THREE.Vector3, handUp: THREE.Vector3) {
     const a = LAYOUT.upperArm;
     const b = LAYOUT.foreArm;
@@ -77,6 +108,8 @@ export class Arm {
     _m.lookAt(_tmp.clone().add(this.wrist), this.wrist, handUp);
     this.hand.quaternion.setFromRotationMatrix(_m);
     this.hand.position.copy(this.wrist);
+    this.pointHand.quaternion.copy(this.hand.quaternion);
+    this.pointHand.position.copy(this.wrist);
   }
 }
 

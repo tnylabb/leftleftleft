@@ -18,10 +18,11 @@ export class LocalSession extends GameSession {
   constructor(
     readonly localRoles: Role[],
     length: StageLength,
+    night: boolean,
     seed?: number,
   ) {
     super();
-    this.params = { seed: seed ?? ((Math.random() * 0xffffffff) >>> 0), length };
+    this.params = { seed: seed ?? ((Math.random() * 0xffffffff) >>> 0), length, night };
   }
 
   get stageParams(): StageParams {
@@ -44,7 +45,8 @@ export class LocalSession extends GameSession {
         impact: (fx) => this.emit('impact', fx),
         mud: (fx) => this.emit('mud', fx),
         doors: (d) => this.emit('doors', d),
-        wipers: (on) => this.emit('wipers', on),
+        wiperCycle: () => this.emit('wiperCycle', undefined),
+        seats: (s) => this.emit('seats', s),
         callout: (m) => this.emit('callout', m),
         teleport: (p) => this.emit('carTeleport', p),
         correction: (buf) => this.emit('carCorrection', buf),
@@ -113,8 +115,14 @@ export class LocalSession extends GameSession {
     // locally both seats exist (AI passenger closes their own door in solo)
     this.authority?.closeDoor(side === 'left' ? 'driver' : 'navigator', side);
   }
-  setWipers(on: boolean) {
-    this.authority?.setWipers('driver', on);
+  wiperCycle() {
+    this.authority?.wiperCycle('driver');
+  }
+  exitCar(role: Role = 'driver') {
+    this.authority?.exitCar(role);
+  }
+  enterCar(pos: { x: number; y: number; z: number }, role: Role = 'driver') {
+    this.authority?.enterCar(role, pos);
   }
   setTabletHeld(held: boolean) {
     this.authority?.tabletGrab('navigator', held);

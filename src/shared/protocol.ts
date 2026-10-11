@@ -14,6 +14,7 @@ import type {
   RaceStats,
   Role,
   RoomSnapshot,
+  SeatStates,
 } from './types';
 
 export interface JoinAck {
@@ -42,7 +43,7 @@ export interface MudReport {
 export interface ServerToClientEvents {
   'room:state': (room: RoomSnapshot) => void;
   'room:kicked': (reason: string) => void;
-  'game:load': (payload: { seed: number; length: StageLength }) => void;
+  'game:load': (payload: { seed: number; length: StageLength; night: boolean }) => void;
   'game:countdown': (payload: { endsAt: number }) => void;
   'game:go': (payload: { startedAt: number }) => void;
   'game:results': (results: RaceResults) => void;
@@ -58,7 +59,8 @@ export interface ServerToClientEvents {
   'fx:mud': (fx: MudFx) => void;
   'fx:wipe': (payload: { u: number; v: number }) => void;
   'doors:state': (doors: DoorStates) => void;
-  'wipers:state': (payload: { on: boolean }) => void;
+  'wipers:cycle': () => void;
+  'seats:state': (seats: SeatStates) => void;
   'tablet:owner': (payload: { holder: Role | null }) => void;
   callout: (msg: CalloutMsg) => void;
   hint: (payload: { text: string }) => void;
@@ -72,7 +74,7 @@ export interface ClientToServerEvents {
   'room:leave': () => void;
   'lobby:role': (payload: { role: Role | null }) => void;
   'lobby:ready': (payload: { ready: boolean }) => void;
-  'lobby:stage': (payload: { length: StageLength; seed?: number }) => void;
+  'lobby:stage': (payload: { length: StageLength; seed?: number; night?: boolean }) => void;
   'game:loaded': (payload: { hash: number }) => void;
   'game:restart': (payload: { mode: 'retry' | 'new' }) => void;
   'game:toLobby': () => void;
@@ -85,7 +87,9 @@ export interface ClientToServerEvents {
   'event:wipe': (payload: { u: number; v: number }) => void;
   'event:tabletDrop': () => void;
   'door:close': (payload: { side: DoorSide }) => void;
-  'wipers:set': (payload: { on: boolean }) => void;
+  'wipers:cycle': () => void;
+  'player:exit': () => void;
+  'player:enter': (payload: { x: number; y: number; z: number }) => void;
   'tablet:grab': (payload: { held: boolean }) => void;
   callout: (payload: { id: CalloutId; text?: string }) => void;
   'time:sync': (payload: { t: number }, ack: (res: { t: number; server: number }) => void) => void;

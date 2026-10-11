@@ -135,6 +135,22 @@ export class CarModel {
     }
 
     this.doors = { left: this.buildDoor('left'), right: this.buildDoor('right') };
+
+    // headlights + rally spot lights (always present so the light count is fixed;
+    // switched on for night stages)
+    for (const [x, angle, reach] of [[-0.48, 0.42, 70], [0.48, 0.42, 70], [0, 0.22, 110]] as const) {
+      const l = new THREE.SpotLight(0xfff2d8, 0, reach, angle, 0.55, 1.15);
+      l.position.set(x, 0.1, -1.98);
+      l.target.position.set(x * 1.4, -1.6, -24);
+      this.root.add(l, l.target);
+      this.headlights.push(l);
+    }
+  }
+
+  readonly headlights: THREE.SpotLight[] = [];
+
+  setHeadlights(on: boolean) {
+    this.headlights.forEach((l, i) => (l.intensity = on ? (i === 2 ? 140 : 90) : 0));
   }
 
   private buildDoor(side: 'left' | 'right'): DoorRig {

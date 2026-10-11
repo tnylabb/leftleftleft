@@ -37,6 +37,7 @@ export class App {
   private game: Game | null = null;
   private mode: GameMode = 'solo';
   private menuLength: StageLength = 'medium';
+  private menuNight = false;
   private serverStatus: ConnectionStatus | 'checking' = 'checking';
   private loadToken = 0;
   private lastT = 0;
@@ -60,21 +61,19 @@ export class App {
 
     window.addEventListener('keydown', (e) => {
       if (e.code === 'Escape') this.togglePause();
-      if (e.code === 'F1') {
-        e.preventDefault();
-        this.ui.toggleControlsHelp();
-      }
+      // Tab = hold-to-show controls overlay in game; keep focus from jumping
+      if (e.code === 'Tab' && this.game && this.input.gameplay) e.preventDefault();
       if (e.code === 'KeyT') this.voice?.setTalking(true);
     });
     window.addEventListener('keyup', (e) => {
       if (e.code === 'KeyT') this.voice?.setTalking(false);
     });
     renderer.canvas.addEventListener('click', () => {
-      if (this.game && this.mode !== 'couch' && this.isDriver && !this.ui.isShown('pause') && !this.ui.isShown('results')) this.input.requestPointerLock();
+      if (this.game?.wantsPointerLock && !this.ui.isShown('pause') && !this.ui.isShown('results')) this.input.requestPointerLock();
     });
     document.addEventListener('pointerlockchange', () => {
       // Esc while pointer-locked only releases the lock in most browsers: treat it as pause.
-      if (!document.pointerLockElement && this.game && this.isDriver && this.mode !== 'couch' && this.game.phase !== 'finished' && !this.ui.isShown('pause')) {
+      if (!document.pointerLockElement && this.game?.wantsPointerLock && !this.game.isPaused && !this.ui.isShown('pause') && !this.ui.isShown('results')) {
         this.openPause();
       }
     });
@@ -116,9 +115,10 @@ export class App {
     try {
       if (this.game) {
         this.game.frame(dt);
-        if (this.game.phase === 'finished' && this.game.results && !this.resultsShown) {
+        // results appear once the finish cinematic has played out
+        if (this.game.phase === 'finished' && this.game.results && this.game.cinematicDone && !this.resultsShown) {
           this.resultsShown = true;
-          window.setTimeout(() => this.showResults(), 1200);
+          this.showResults();
         }
         if (this.game.phase !== 'loading' && this.waitingBanner) {
           this.waitingBanner = false;
@@ -159,7 +159,7 @@ export class App {
   private showMenu() {
     this.ui.hideAll();
     this.ui.hideHud();
-    this.ui.renderMenu({ server: this.serverStatus, seat: this.serverStatus === 'online' ? this.savedSeatCode() : null, length: this.menuLength, error: this.menuError });
+    this.ui.renderMenu({ server: this.serverStatus, seat: this.serverStatus === 'online' ? this.savedSeatCode() : null, length: this.menuLength, night: this.menuNight, error: this.menuError });
     this.menuError = '';
     this.ui.show('menu');
     this.input.gameplay = false;
@@ -170,6 +170,10 @@ export class App {
     switch (action) {
       case 'length':
         this.menuLength = (data.length as StageLength) ?? 'medium';
+        this.showMenu();
+        break;
+      case 'time':
+        this.menuNight = data.night === '1';
         this.showMenu();
         break;
       case 'create':
@@ -214,10 +218,13 @@ export class App {
         break;
       }
       case 'stage':
-        if (this.online?.room) this.online.setStage((data.length as StageLength) ?? 'medium', this.online.room.stage.seed);
+        if (this.online?.room) this.online.setStage((data.length as StageLength) ?? 'medium', this.online.room.stage.seed, this.online.room.stage.night);
+        break;
+      case 'stage-time':
+        if (this.online?.room) this.online.setStage(this.online.room.stage.length, this.online.room.stage.seed, data.night === '1');
         break;
       case 'reroll':
-        if (this.online?.room) this.online.setStage(this.online.room.stage.length);
+        if (this.online?.room) this.online.setStage(this.online.room.stage.length, undefined, this.online.room.stage.night);
         break;
       case 'copy-code':
         void navigator.clipboard?.writeText(data.code ?? '').then(() => {
@@ -370,7 +377,7 @@ export class App {
   private startLocal(mode: 'couch' | 'solo') {
     this.teardownSession();
     this.mode = mode;
-    const s = new LocalSession(mode === 'couch' ? ['driver', 'navigator'] : ['driver'], this.menuLength);
+    const s = new LocalSession(mode === 'couch' ? ['driver', 'navigator'] : ['driver'], this.menuLength, this.menuNight);
     this.session = s;
     this.unsub.push(s.on('load', (p) => void this.startGame(p)));
     s.start();
@@ -409,15 +416,15 @@ export class App {
     this.game = game;
     session.loaded(hash);
     this.ui.show('loading', false);
-    this.ui.setupHud(game.hudViews, this.mode);
+    this.ui.setupHud(game.hudViews);
     this.input.gameplay = true;
     if (game.phase === 'loading') {
       this.waitingBanner = true;
       this.ui.banner('WAITING FOR YOUR CO-DRIVER TO LOAD THE STAGE…');
     }
-    if (this.isDriver && this.mode !== 'couch') this.ui.hint('CLICK THE SCREEN TO LOOK AROUND WITH THE MOUSE', 5);
-    if (this.mode === 'couch') this.ui.hint('DRIVER: WASD · NAVIGATOR: MOUSE + ARROWS · F1 FOR HELP', 6);
-    else if (!this.isDriver) this.ui.hint('PRESS F TO PICK UP THE TABLET', 6);
+    if (this.isDriver && this.mode !== 'couch') this.ui.hint('CLICK THE SCREEN TO LOOK AROUND · HOLD TAB FOR CONTROLS', 5);
+    if (this.mode === 'couch') this.ui.hint('DRIVER: WASD · NAVIGATOR: MOUSE + ARROWS · HOLD TAB FOR CONTROLS', 6);
+    else if (!this.isDriver) this.ui.hint('CLICK THE TABLET TO PICK IT UP · HOLD TAB FOR CONTROLS', 6);
     this.renderer.canvas.focus();
   }
 
@@ -428,6 +435,7 @@ export class App {
     }
     this.input.exitPointerLock();
     this.ui.hideHud();
+    this.ui.cinematic(null);
     this.audio.setPaused(false);
   }
 
@@ -435,6 +443,7 @@ export class App {
     const g = this.game;
     if (!g?.results) return;
     this.input.exitPointerLock();
+    this.ui.cinematic(null);
     const room = this.online?.room;
     const me = this.online?.playerId ?? '';
     const partner = room?.players.find((p) => p.id !== me)?.id ?? '';

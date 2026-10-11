@@ -1,11 +1,14 @@
 // End-to-end multiplayer protocol test against a running server.
 // Start the server first (npm run dev or npm start), then: npx tsx scripts/net-test.ts [url]
 // Simulates a driver and a navigator: lobby, ready, load, countdown, car-state
-// relay, validation, callouts, reset, disconnect + reconnect with the seat token.
+// relay, validation, callouts, reset, manual wipers, getting out / pulling /
+// getting back in, disconnect + reconnect with the seat token.
 
 import { io, type Socket } from 'socket.io-client';
+import * as THREE from 'three';
 import type { ClientToServerEvents, JoinAck, ServerToClientEvents } from '../src/shared/protocol';
-import { CAR, readFloat32, toArrayBuffer } from '../src/shared/snapshot';
+import { CAR_HOOKS, DOOR_EXIT, PULL_FORCE_MAX } from '../src/shared/constants';
+import { CABIN, CABIN_FLAG, CAR, CAR_FLAG, readFloat32, toArrayBuffer } from '../src/shared/snapshot';
 import { generateStage, stageStartPose } from '../src/shared/stage/StageGenerator';
 import type { RoomSnapshot } from '../src/shared/types';
 
@@ -135,6 +138,95 @@ const tele = once(driver, 'car:teleport');
 driver.emit('car:reset');
 const pose = await tele;
 check(Math.abs(pose.x - start.x) < 30, 'reset teleports the car back onto the road');
+
+// manual wipers: one cycle per press, relayed to both players, driver only, debounced
+let wipeD = 0;
+let wipeN = 0;
+driver.on('wipers:cycle', () => wipeD++);
+nav.on('wipers:cycle', () => wipeN++);
+driver.emit('wipers:cycle');
+driver.emit('wipers:cycle'); // inside the cooldown: ignored
+nav.emit('wipers:cycle'); // the navigator can't flick the stalk
+await sleep(350);
+check(wipeD === 1 && wipeN === 1, `one wiper cycle per press, shown to both players (driver ${wipeD}, navigator ${wipeN})`);
+driver.emit('wipers:cycle');
+await sleep(250);
+check(wipeD === 2 && wipeN === 2, 'pressing again runs another cycle');
+
+// getting out, pulling on the tow hooks, getting back in
+const carQ = new THREE.Quaternion(pose.qx, pose.qy, pose.qz, pose.qw);
+const carP = new THREE.Vector3(pose.x, pose.y, pose.z);
+const local = (p: { x: number; y: number; z: number }) => new THREE.Vector3(p.x, p.y, p.z).applyQuaternion(carQ).add(carP);
+let seats = { driver: true, navigator: true };
+let seatEvents = 0;
+nav.on('seats:state', (s) => {
+  seats = s;
+  seatEvents++;
+});
+let relayedCar: Float32Array | null = null;
+nav.on('car:state', (b) => (relayedCar = readFloat32(b)));
+setPos(pose.x, pose.y, pose.z, 0.5);
+buf[CAR.vz] = -10;
+driver.emit('car:state', toArrayBuffer(buf));
+await sleep(120);
+driver.emit('player:exit');
+await sleep(250);
+check(seatEvents === 0 && seats.driver, 'cannot get out while the car is moving');
+buf[CAR.vz] = 0;
+buf[CAR.time] = 0.7;
+driver.emit('car:state', toArrayBuffer(buf));
+await sleep(120);
+driver.emit('player:exit');
+nav.emit('player:exit');
+await sleep(300);
+check(!seats.driver && !seats.navigator, 'both players get out once the car has stopped');
+
+// driver on foot: server forces the "driver out" flag and drops a grip on a hook they aren't next to
+buf[CAR.time] = 0.8;
+buf[CAR.flags] = 0;
+const far = local({ x: 0, y: 0, z: 30 });
+buf[CAR.footX] = far.x;
+buf[CAR.footY] = far.y;
+buf[CAR.footZ] = far.z;
+buf[CAR.footGrip] = 1;
+driver.emit('car:state', toArrayBuffer(buf));
+await sleep(150);
+const rc = relayedCar as Float32Array | null;
+check(!!rc && (rc[CAR.flags] & CAR_FLAG.driverOut) !== 0, 'relayed car state marks the driver as out (server-owned seats)');
+check(!!rc && rc[CAR.footGrip] === -1, 'a tow-hook grip from 30 m away is rejected');
+
+// navigator on foot pulling: force clamped to a human-sized pull, only next to a hook
+const cabin = new Float32Array(CABIN.LENGTH);
+const rear = local(CAR_HOOKS[1]);
+const sendCabin = async (fx: number, fz: number, pull: number) => {
+  cabin[CABIN.time] += 0.05;
+  cabin[CABIN.footX] = fx;
+  cabin[CABIN.footY] = rear.y;
+  cabin[CABIN.footZ] = fz;
+  cabin[CABIN.footGrip] = 1;
+  cabin[CABIN.pullZ] = pull;
+  cabin[CABIN.heldObject] = -1;
+  const got = once(driver, 'cabin:state', 2000).then((b) => readFloat32(b)).catch(() => null);
+  nav.emit('cabin:state', toArrayBuffer(cabin));
+  return got;
+};
+const near = await sendCabin(rear.x + 0.3, rear.z + 0.5, 5000);
+check(!!near && near[CABIN.footGrip] === 1 && Math.abs(near[CABIN.pullZ] - PULL_FORCE_MAX) < 1, `pull at the rear hook is clamped to ${PULL_FORCE_MAX} N (got ${near?.[CABIN.pullZ]})`);
+check(!!near && (near[CABIN.flags] & CABIN_FLAG.navOut) !== 0, 'relayed cabin state marks the navigator as out');
+await sleep(120);
+const away = await sendCabin(rear.x + 12, rear.z + 12, 1200);
+check(!!away && away[CABIN.footGrip] === -1 && away[CABIN.pullZ] === 0, 'no pull force when not standing at a hook');
+
+// back in: only at your own door
+const doorN = local(DOOR_EXIT.navigator);
+nav.emit('player:enter', { x: doorN.x + 15, y: doorN.y, z: doorN.z });
+await sleep(250);
+check(!seats.navigator, 'cannot get in from 15 m away');
+nav.emit('player:enter', { x: doorN.x, y: doorN.y, z: doorN.z });
+const doorD = local(DOOR_EXIT.driver);
+driver.emit('player:enter', { x: doorD.x, y: doorD.y, z: doorD.z });
+await sleep(300);
+check(seats.navigator && seats.driver, 'both climb back in at their own doors');
 
 // doors via impact
 let doors: { left: boolean; right: boolean } | null = null;

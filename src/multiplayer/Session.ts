@@ -17,12 +17,13 @@ import type {
   RaceStats,
   Role,
   RoomSnapshot,
+  SeatStates,
 } from '../shared/types';
 
 export type ConnectionStatus = 'idle' | 'connecting' | 'online' | 'reconnecting' | 'offline';
 
 export interface SessionEvents {
-  load: { seed: number; length: StageLength };
+  load: { seed: number; length: StageLength; night: boolean };
   countdown: { endsAt: number };
   go: { startedAt: number };
   results: RaceResults;
@@ -38,7 +39,8 @@ export interface SessionEvents {
   mud: MudFx;
   wipe: { u: number; v: number };
   doors: DoorStates;
-  wipers: boolean;
+  wiperCycle: void;
+  seats: SeatStates;
   tabletOwner: Role | null;
   callout: CalloutMsg;
   hint: string;
@@ -63,7 +65,11 @@ export abstract class GameSession extends EventBus<SessionEvents> {
   abstract reportTabletDrop(): void;
   abstract requestReset(): void;
   abstract closeDoor(side: DoorSide): void;
-  abstract setWipers(on: boolean): void;
+  /** One manual wiper sweep. */
+  abstract wiperCycle(): void;
+  /** `role` selects the player in split screen (online the server knows who you are). */
+  abstract exitCar(role?: Role): void;
+  abstract enterCar(pos: { x: number; y: number; z: number }, role?: Role): void;
   abstract setTabletHeld(held: boolean): void;
   abstract callout(id: CalloutId, text?: string): void;
   abstract loaded(hash: number): void;

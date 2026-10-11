@@ -27,12 +27,14 @@ export const CAR_SPEC = {
   antiRollFront: 9500,
   antiRollRear: 7000,
   maxSteerLow: 0.6,
-  maxSteerHigh: 0.15,
+  maxSteerHigh: 0.12,
   steerSpeedIn: 1.9,
   steerSpeedOut: 3.4,
-  brakeFront: 2900,
-  brakeRear: 1750,
-  dragQuadratic: 0.5,
+  brakeFront: 3700,
+  brakeRear: 2400,
+  dragQuadratic: 0.82,
+  /** Share of drive torque sent to the front axle (AWD rally hatch). */
+  frontDriveSplit: 0.42,
   dragLinear: 8,
   /** Tyre force application point is raised to reduce rollovers. */
   tyreForceLift: 0.17,
@@ -46,7 +48,7 @@ export const CAR_SPEC = {
 export type SurfaceKind = 'road' | 'grass' | 'mud';
 
 export const SURFACE_GRIP: Record<SurfaceKind, { mu: number; slide: number; drag: number }> = {
-  road: { mu: 1.0, slide: 0.72, drag: 0 }, // loose gravel
+  road: { mu: 1.06, slide: 0.72, drag: 0 }, // loose gravel
   grass: { mu: 0.78, slide: 0.66, drag: 120 },
   mud: { mu: 0.5, slide: 0.55, drag: 900 },
 };

@@ -310,11 +310,6 @@ export class Cockpit {
     right.set(Math.cos(a) * r, Math.sin(a) * r, 0.01).applyMatrix4(m);
   }
 
-  gearKnob(out: THREE.Vector3): THREE.Vector3 {
-    this.gearLever.updateMatrix();
-    return out.set(0, 0.21, 0).applyMatrix4(this.gearLever.matrix);
-  }
-
   handbrakeGrip(out: THREE.Vector3): THREE.Vector3 {
     this.handbrake.updateMatrix();
     return out.set(0, 0.04, 0.2).applyMatrix4(this.handbrake.matrix);

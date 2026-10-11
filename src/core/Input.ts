@@ -167,7 +167,7 @@ export class Input {
       throttle: val(7),
       brake: val(6),
       handbrake: btn(0) || btn(5),
-      reset: this.gpPressed.has(3),
+      reset: btn(3), // held: the emergency reset needs a deliberate hold
       lookX: dz(gp.axes[2] ?? 0),
       lookY: dz(gp.axes[3] ?? 0),
     };

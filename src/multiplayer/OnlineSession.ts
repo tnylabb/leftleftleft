@@ -127,13 +127,14 @@ export class OnlineSession extends GameSession {
     s.on('fx:mud', (fx) => this.emit('mud', fx));
     s.on('fx:wipe', (p) => this.emit('wipe', p));
     s.on('doors:state', (d) => this.emit('doors', d));
-    s.on('wipers:state', (p) => this.emit('wipers', p.on));
+    s.on('wipers:cycle', () => this.emit('wiperCycle', undefined));
+    s.on('seats:state', (seats) => this.emit('seats', seats));
     s.on('tablet:owner', (p) => this.emit('tabletOwner', p.holder));
     s.on('callout', (m) => this.emit('callout', m));
     s.on('hint', (p) => this.emit('hint', p.text));
   }
 
-  private pendingLoad: { seed: number; length: StageLength } | null = null;
+  private pendingLoad: { seed: number; length: StageLength; night: boolean } | null = null;
 
   /** Only start building a stage once we know which seat we're in. */
   private flushLoad() {
@@ -248,8 +249,8 @@ export class OnlineSession extends GameSession {
   setReady(ready: boolean) {
     this.socket.emit('lobby:ready', { ready });
   }
-  setStage(length: StageLength, seed?: number) {
-    this.socket.emit('lobby:stage', { length, seed });
+  setStage(length: StageLength, seed?: number, night?: boolean) {
+    this.socket.emit('lobby:stage', { length, seed, night });
   }
 
   // --- gameplay ---------------------------------------------------------------
@@ -280,8 +281,14 @@ export class OnlineSession extends GameSession {
   closeDoor(side: DoorSide) {
     this.socket.emit('door:close', { side });
   }
-  setWipers(on: boolean) {
-    this.socket.emit('wipers:set', { on });
+  wiperCycle() {
+    this.socket.emit('wipers:cycle');
+  }
+  exitCar() {
+    this.socket.emit('player:exit');
+  }
+  enterCar(pos: { x: number; y: number; z: number }) {
+    this.socket.emit('player:enter', pos);
   }
   setTabletHeld(held: boolean) {
     this.socket.emit('tablet:grab', { held });

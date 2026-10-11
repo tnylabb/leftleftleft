@@ -1,21 +1,21 @@
-// Front-engine, front-wheel-drive hatchback drivetrain: engine torque curve,
-// five-speed gearbox with automatic (or manual) shifting and reverse logic.
+// Rally-hatch drivetrain: engine torque curve and a five-speed automatic
+// gearbox with arcade reverse logic (hold brake at a standstill to reverse).
 
 import { clamp, lerp } from '../shared/math';
 
 export const WHEEL_RADIUS = 0.3;
-const RATIOS: Record<number, number> = { [-1]: -3.3, 0: 0, 1: 3.45, 2: 2.1, 3: 1.46, 4: 1.12, 5: 0.9 };
+const RATIOS: Record<number, number> = { [-1]: -3.3, 0: 0, 1: 3.25, 2: 2.08, 3: 1.5, 4: 1.15, 5: 0.92 };
 const FINAL = 4.05;
 const IDLE = 900;
-const REDLINE = 7000;
-const EFFICIENCY = 0.86;
+const REDLINE = 7400;
+const EFFICIENCY = 0.88;
+const PEAK_TORQUE = 235; // N*m - a tuned rally engine
 
 export interface DrivetrainInput {
   throttle: number;
   brake: number;
-  shiftUp: boolean;
-  shiftDown: boolean;
-  manual: boolean;
+  /** Nobody at the controls (driver out): gearbox in neutral so the car rolls freely. */
+  neutral: boolean;
 }
 
 export class Drivetrain {
@@ -39,8 +39,8 @@ export class Drivetrain {
   }
 
   torque(rpm: number): number {
-    const x = (rpm - 4300) / 5200;
-    return clamp(152 * (1 - x * x), 70, 152);
+    const x = (rpm - 4800) / 5600;
+    return clamp(PEAK_TORQUE * (1 - x * x), PEAK_TORQUE * 0.48, PEAK_TORQUE);
   }
 
   /**
@@ -50,6 +50,18 @@ export class Drivetrain {
   update(dt: number, inp: DrivetrainInput, speedFwd: number, slipping: boolean): number {
     let throttle = inp.throttle;
     let brake = inp.brake;
+
+    if (inp.neutral) {
+      // engine idles, gearbox in neutral: no drive, no engine braking (brakes still work)
+      this.gear = 0;
+      this.shiftTimer = 0;
+      this.rpm += (IDLE - this.rpm) * clamp(dt * 4, 0, 1);
+      this.throttle = this.driveForce = 0;
+      this.brake = clamp(inp.brake, 0, 1);
+      this.limiter = false;
+      return 0;
+    }
+    if (this.gear === 0) this.gear = speedFwd < -0.5 ? -1 : 1;
 
     // --- direction / reverse handling (arcade style) ------------------------------
     if (this.gear === -1) {
@@ -67,16 +79,13 @@ export class Drivetrain {
       }
     } else this.reverseHold = 0;
 
-    // --- shifting (downshifts use wheel-linked rpm so wheelspin can't hold a high gear)
+    // --- automatic shifting (downshifts use wheel-linked rpm so wheelspin can't hold a high gear)
     const wheelRpm = (Math.abs(speedFwd) / WHEEL_RADIUS) * (60 / (Math.PI * 2));
     if (this.shiftTimer > 0) this.shiftTimer -= dt;
-    if (inp.manual) {
-      if (inp.shiftUp && this.gear < 5 && this.gear !== -1) this.shift(this.gear + 1);
-      if (inp.shiftDown && this.gear > 1) this.shift(this.gear - 1);
-    } else if (this.gear >= 1 && this.shiftTimer <= 0) {
+    if (this.gear >= 1 && this.shiftTimer <= 0) {
       const linkedNow = wheelRpm * (RATIOS[this.gear] ?? 0) * FINAL;
-      if (this.rpm > 6450 && linkedNow > 6000 && this.gear < 5 && !slipping) this.shift(this.gear + 1);
-      else if (linkedNow < 2650 && this.gear > 1) this.shift(this.gear - 1);
+      if (this.rpm > 6900 && linkedNow > 6400 && this.gear < 5 && !slipping) this.shift(this.gear + 1);
+      else if (linkedNow < 2900 && this.gear > 1) this.shift(this.gear - 1);
     }
 
     // --- rpm -------------------------------------------------------------------------
@@ -85,8 +94,8 @@ export class Drivetrain {
     let target: number;
     if (this.shiftTimer > 0 || ratio === 0) target = lerp(IDLE + 400, REDLINE * 0.8, throttle * 0.6);
     else if (slipping) target = Math.max(linked, IDLE + throttle * (REDLINE - IDLE) * 0.95);
-    else target = Math.max(linked, IDLE + throttle * 2600 * clamp(1 - wheelRpm / 400, 0, 1)); // clutch slip at launch
-    const rate = target > this.rpm ? 9 : 6;
+    else target = Math.max(linked, IDLE + throttle * 2800 * clamp(1 - wheelRpm / 400, 0, 1)); // clutch slip at launch
+    const rate = target > this.rpm ? 10 : 6;
     this.rpm += (target - this.rpm) * clamp(rate * dt, 0, 1);
     this.rpm = clamp(this.rpm, IDLE * 0.9, REDLINE + 150);
     this.limiter = this.rpm > REDLINE - 30 && throttle > 0.5;
@@ -98,7 +107,7 @@ export class Drivetrain {
       force = (tq * ratio * FINAL * EFFICIENCY) / WHEEL_RADIUS;
       if (throttle < 0.05 && this.rpm > 1400) {
         // engine braking
-        force -= Math.sign(speedFwd) * 260 * (this.rpm / REDLINE) * Math.min(1, Math.abs(speedFwd));
+        force -= Math.sign(speedFwd) * 300 * (this.rpm / REDLINE) * Math.min(1, Math.abs(speedFwd));
       }
     }
     if (this.gear === -1 && speedFwd < -7) force = Math.max(force, 0); // reverse speed limit
@@ -111,6 +120,6 @@ export class Drivetrain {
   private shift(g: number) {
     if (g === this.gear) return;
     this.gear = g;
-    this.shiftTimer = 0.2;
+    this.shiftTimer = 0.16;
   }
 }

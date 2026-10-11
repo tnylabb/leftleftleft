@@ -142,6 +142,19 @@ export class AudioEngine {
   chime() {
     [784, 988, 1319].forEach((f, i) => this.tone({ bus: 'ui', freq: f, duration: 0.3, gain: 0.2, type: 'triangle', delay: i * 0.08 }));
   }
+  /** Short synthesised celebration for the stage finish: rising brass-ish stab + crowd swell. */
+  fanfare() {
+    const notes = [523, 659, 784, 1047];
+    notes.forEach((f, i) => {
+      this.tone({ bus: 'ui', freq: f, duration: i === 3 ? 1.1 : 0.22, gain: 0.16, type: 'sawtooth', delay: i * 0.12 });
+      this.tone({ bus: 'ui', freq: f * 1.005, duration: i === 3 ? 1.1 : 0.22, gain: 0.1, type: 'square', delay: i * 0.12 });
+    });
+    this.tone({ bus: 'ui', freq: 784, duration: 1.0, gain: 0.1, type: 'triangle', delay: 0.48 });
+    // distant crowd cheer
+    this.burst({ bus: 'environment', duration: 2.2, gain: 0.22, freq: 1400, q: 0.5, attack: 0.5, delay: 0.25 });
+    this.burst({ bus: 'environment', duration: 1.8, gain: 0.12, freq: 3200, q: 0.8, attack: 0.4, delay: 0.4 });
+  }
+
   radioBlip() {
     this.burst({ bus: 'voice', duration: 0.08, gain: 0.18, freq: 2500, q: 0.8 });
     this.tone({ bus: 'voice', freq: 1100, duration: 0.05, gain: 0.08, type: 'square' });

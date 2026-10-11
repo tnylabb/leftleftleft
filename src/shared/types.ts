@@ -8,6 +8,8 @@ export type RoomPhase = 'lobby' | 'loading' | 'countdown' | 'racing' | 'finished
 export interface StageParams {
   seed: number;
   length: StageLength;
+  /** Night stage: dark, headlights, the tablet needs the flashlight to be read. */
+  night: boolean;
 }
 
 export type CornerSeverity = 'keep' | 'easy' | 'medium' | 'hard' | 'hairpin';
@@ -83,6 +85,7 @@ export interface RaceStats {
   crashes: number;
   missedTurns: number;
   tabletDrops: number;
+  resets: number;
   penaltiesMs: number;
   topSpeed: number;
   wrongWay: boolean;
@@ -104,7 +107,13 @@ export type RaceEvent =
   | { type: 'wrongWay'; active: boolean }
   | { type: 'crash'; strength: number }
   | { type: 'finish'; timeMs: number }
-  | { type: 'stuck' };
+  | { type: 'stuck'; flipped: boolean };
+
+/** Which occupants are sitting in the car (false = out on foot). */
+export interface SeatStates {
+  driver: boolean;
+  navigator: boolean;
+}
 
 export interface DoorStates {
   left: boolean; // true = open (unlatched)

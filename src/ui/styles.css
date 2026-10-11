@@ -262,3 +262,33 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; 
 .voice-row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
 .meter { width: 60px; height: 8px; background: #333; }
 .meter > div { height: 100%; background: #5cdb6e; width: 0; }
+
+/* ---------- hold-Tab controls overlay ---------- */
+.hud-tabhint { position: absolute; left: 14px; bottom: 14px; font-size: 12px; color: var(--cream-2); background: rgba(0,0,0,0.45); padding: 4px 8px; }
+.hud-tabhint kbd { font-family: var(--font); font-size: 10px; background: var(--cream); color: var(--ink); padding: 1px 5px; border-radius: 2px; }
+.hud-tab { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; gap: 14px; pointer-events: none; padding: 60px 12px; }
+.hud-tab.show { display: flex; }
+.hud-tab .tab-panel, .hud-tab .tab-callouts { background: rgba(14, 14, 12, 0.88); border: 3px solid var(--ink); box-shadow: 6px 6px 0 rgba(0,0,0,0.4); padding: 12px 14px; max-height: 100%; overflow: hidden; }
+.hud-tab h4 { font-family: var(--font); margin: 0 0 8px; color: var(--orange); font-size: 14px; letter-spacing: 1px; }
+.tab-row { display: grid; grid-template-columns: minmax(90px, auto) 1fr; gap: 10px; align-items: center; font-size: 13px; line-height: 1.75; }
+.tab-row kbd, .tab-callouts kbd { font-family: var(--font); font-size: 11px; background: var(--cream); color: var(--ink); padding: 1px 6px; border-radius: 2px; white-space: nowrap; justify-self: start; }
+.tab-callouts { font-size: 12px; line-height: 1.75; }
+@media (max-width: 760px) { .hud-tab .tab-callouts { display: none; } }
+
+/* ---------- emergency reset hold ---------- */
+.hud-reset { position: absolute; left: 50%; bottom: 120px; transform: translateX(-50%); width: 240px; text-align: center; font-family: var(--font); font-size: 12px; color: #fff; display: none; text-shadow: 2px 2px 0 var(--ink); }
+.hud-reset .track { height: 10px; background: rgba(0,0,0,0.6); border: 2px solid var(--ink); margin-top: 4px; }
+.hud-reset .fill { height: 100%; width: 0; background: var(--red); }
+
+/* ---------- flashlight glare (driver only) ---------- */
+.hud-glare { position: absolute; inset: 0; background: radial-gradient(ellipse at 62% 48%, #ffffff 0%, #fff7e0 38%, rgba(255,247,224,0.85) 70%, rgba(255,240,210,0.6) 100%); opacity: 0; pointer-events: none; }
+
+/* ---------- cinematic finish ---------- */
+#cinematic { position: absolute; inset: 0; pointer-events: none; }
+#cinematic .bar { position: absolute; left: 0; right: 0; height: 0; background: #000; transition: height 0.9s ease; }
+#cinematic .bar.top { top: 0; }
+#cinematic .bar.bottom { bottom: 0; }
+#cinematic.show .bar { height: 11vh; }
+#cinematic .title { position: absolute; left: 0; right: 0; bottom: 15vh; text-align: center; font-family: var(--font); font-size: clamp(34px, 6vw, 84px); color: var(--yellow); text-shadow: 6px 6px 0 var(--ink); opacity: 0; transform: skew(-8deg) translateY(30px); transition: opacity 0.6s ease 0.5s, transform 0.8s ease 0.5s; }
+#cinematic .title .sub { display: block; font-size: 0.38em; color: var(--cream); letter-spacing: 3px; }
+#cinematic.show .title { opacity: 1; transform: skew(-8deg) translateY(0); }

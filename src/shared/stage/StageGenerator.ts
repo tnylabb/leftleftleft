@@ -11,21 +11,21 @@ import { createTerrainBase } from './terrainBase';
 type SegmentKind = 'straight' | 'keep' | 'easy' | 'medium' | 'hard' | 'hairpin' | 'chicane';
 
 const SEGMENT_WEIGHTS: Record<SegmentKind, number> = {
-  straight: 25,
-  keep: 7,
-  easy: 17,
+  straight: 18,
+  keep: 6,
+  easy: 12,
   medium: 20,
-  hard: 16,
-  hairpin: 6,
-  chicane: 9,
+  hard: 22,
+  hairpin: 10,
+  chicane: 12,
 };
 
 const CORNER_PARAMS: Record<Exclude<SegmentKind, 'straight' | 'chicane'>, { r: [number, number]; a: [number, number] }> = {
   keep: { r: [150, 260], a: [10, 20] },
   easy: { r: [70, 130], a: [25, 55] },
-  medium: { r: [34, 58], a: [40, 95] },
-  hard: { r: [15, 27], a: [60, 110] },
-  hairpin: { r: [10, 12.5], a: [140, 165] },
+  medium: { r: [28, 50], a: [45, 100] },
+  hard: { r: [13, 24], a: [65, 115] },
+  hairpin: { r: [9.5, 11.5], a: [145, 170] },
 };
 
 const DEG = Math.PI / 180;
@@ -146,7 +146,7 @@ function buildPath(seed: number, target: number): PathBuilder {
       const heading = path.hs[path.hs.length - 1];
       const dev = wrapAngle(heading - pref);
       let kind = rng.weighted(SEGMENT_WEIGHTS);
-      if (kind === 'hairpin' && (Math.abs(dev) > 0.5 || lastWasHairpin)) kind = 'hard';
+      if (kind === 'hairpin' && (Math.abs(dev) > 0.8 || lastWasHairpin)) kind = 'hard';
       // choose turn direction: forced back towards the preferred heading when far off
       const towards = dev > 0 ? -1 : 1;
       const pTowards = Math.abs(dev) > 0.9 ? 1 : 0.5 + (0.5 * Math.abs(dev)) / 0.9;
@@ -156,7 +156,7 @@ function buildPath(seed: number, target: number): PathBuilder {
       for (let t = 0; t < 6 && !ok; t++) {
         let profile: number[];
         if (kind === 'straight') {
-          profile = straightProfile(rng.chance(0.6) ? rng.range(25, 70) : rng.range(70, 150));
+          profile = straightProfile(rng.chance(0.7) ? rng.range(18, 55) : rng.range(55, 120));
         } else if (kind === 'chicane') {
           const r1 = rng.range(20, 45);
           const a1 = rng.range(35, 70) * DEG;
@@ -193,7 +193,8 @@ function buildPath(seed: number, target: number): PathBuilder {
       } else failures++;
     }
     if (path.length >= target * 0.72) {
-      if (!path.tryAppend(straightProfile(70))) path.tryAppend(straightProfile(30));
+      // closing straight: approach to the finish line plus a run-off to roll to a stop
+      if (!path.tryAppend(straightProfile(120)) && !path.tryAppend(straightProfile(70))) path.tryAppend(straightProfile(30));
       return path;
     }
   }
@@ -258,8 +259,8 @@ export function generateStage(params: StageParams): StageData {
   const base = createTerrainBase(seed);
   let ys = new Float64Array(count);
   for (let i = 0; i < count; i++) ys[i] = base(xs[i], zs[i]);
-  ys = boxSmooth(ys, 20, 3);
-  const maxStep = 0.085 * step;
+  ys = boxSmooth(ys, 12, 2);
+  const maxStep = 0.11 * step;
   for (let i = 1; i < count; i++) ys[i] = clamp(ys[i], ys[i - 1] - maxStep, ys[i - 1] + maxStep);
   for (let i = count - 2; i >= 0; i--) ys[i] = clamp(ys[i], ys[i + 1] - maxStep, ys[i + 1] + maxStep);
   ys = boxSmooth(ys, 4, 1);
@@ -268,7 +269,10 @@ export function generateStage(params: StageParams): StageData {
 
   const corners = analyseCorners(curvature, count);
   const startIdx = 10;
-  const finishIdx = count - 16;
+  // leave as much of the closing straight as possible after the finish line (run-off)
+  let straight = 0;
+  for (let i = count - 1; i > 0 && Math.abs(curvature[i]) < 1e-4; i--) straight++;
+  const finishIdx = count - clamp(straight - 12, 16, 46);
 
   // --- checkpoints -------------------------------------------------------------
   const cpCount = params.length === 'short' ? 2 : params.length === 'medium' ? 3 : 5;
@@ -320,6 +324,19 @@ export function generateStage(params: StageParams): StageData {
       }
       ys[i] += h;
     }
+  }
+
+  // --- blind crests: a hump just before some tight corners hides the turn ---------
+  // The driver crests the rise and only then sees the road bend away.
+  for (const c of corners) {
+    const p = c.severity === 'hard' || c.severity === 'hairpin' ? 0.45 : c.severity === 'medium' ? 0.25 : 0;
+    if (!rng.chance(p)) continue;
+    const centre = c.entryIdx - rng.int(10, 16);
+    const half = 11; // samples (22 m) each side
+    if (centre - half < startIdx + 25 || centre + half > finishIdx - 12) continue;
+    if (jumps.some((j) => Math.abs(j.idx - centre) < 24) || nearCheckpoint(centre, 14)) continue;
+    const height = rng.range(1.4, 2.3);
+    for (let s = -half; s <= half; s++) ys[centre + s] += height * (0.5 + 0.5 * Math.cos((Math.PI * s) / half));
   }
 
   // --- puddles ---------------------------------------------------------------
@@ -375,9 +392,10 @@ export function generateStage(params: StageParams): StageData {
     hash = hash2(hash, Math.round(zs[i] * 10));
   }
   hash = hash2(hash, corners.length * 1000 + jumps.length * 100 + puddles.length * 10 + checkpoints.length);
+  hash = hash2(hash, params.night ? 0x4e1 : 0xda7);
 
   return {
-    params: { seed, length: params.length },
+    params: { seed, length: params.length, night: !!params.night },
     xs,
     ys,
     zs,

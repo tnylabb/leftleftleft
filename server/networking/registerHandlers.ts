@@ -97,7 +97,7 @@ export function registerHandlers(io: GameServer, rooms: RoomManager) {
     socket.on('lobby:stage', (payload) => {
       const c = ctx();
       if (!c || !isObject(payload) || !isStageLength(payload.length)) return;
-      c.room.setStage(c.slot, payload.length, finite(payload.seed) ? payload.seed : undefined);
+      c.room.setStage(c.slot, payload.length, finite(payload.seed) ? payload.seed : undefined, typeof payload.night === 'boolean' ? payload.night : undefined);
     });
 
     socket.on('game:loaded', (payload) => {
@@ -177,9 +177,20 @@ export function registerHandlers(io: GameServer, rooms: RoomManager) {
       if (c && isObject(p) && isDoorSide(p.side) && limiter.allow('door', 4, 4)) c.room.closeDoor(c.slot, p.side);
     });
 
-    socket.on('wipers:set', (p) => {
+    socket.on('wipers:cycle', () => {
       const c = ctx();
-      if (c && isObject(p) && limiter.allow('wipers', 5, 5)) c.room.wipers(c.slot, p.on === true);
+      if (c && limiter.allow('wipers', 6, 6)) c.room.wiperCycle(c.slot);
+    });
+
+    socket.on('player:exit', () => {
+      const c = ctx();
+      if (c && limiter.allow('seat', 3, 3)) c.room.exitCar(c.slot);
+    });
+
+    socket.on('player:enter', (p) => {
+      const c = ctx();
+      if (!c || !isObject(p) || ![p.x, p.y, p.z].every(finite) || !limiter.allow('seat', 3, 3)) return;
+      c.room.enterCar(c.slot, { x: p.x as number, y: p.y as number, z: p.z as number });
     });
 
     socket.on('tablet:grab', (p) => {

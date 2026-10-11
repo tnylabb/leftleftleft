@@ -1,7 +1,8 @@
-// Shapes and start positions of the tablet and loose cabin objects (car-local frame).
+// Shapes and start positions of the tablet, loose cabin objects, the dashboard
+// flashlight and the glovebox paper map (car-local frame).
 
 import * as THREE from 'three';
-import { LOOSE_OBJECT_COUNT } from '../shared/constants';
+import { CABIN_BODY, CABIN_BODY_COUNT, LOOSE_OBJECT_COUNT } from '../shared/constants';
 
 export const TABLET_SPEC = { hx: 0.13, hy: 0.011, hz: 0.094, mass: 0.65 };
 
@@ -19,8 +20,30 @@ export interface LooseSpec {
 export const LOOSE_OBJECTS: LooseSpec[] = [
   { name: 'water bottle', shape: 'cylinder', size: [0.034, 0.11, 0], mass: 0.5, start: new THREE.Vector3(0.48, -0.08, -0.42), color: 0x8fd0f0, accent: 0x2a6fc0 },
   { name: 'coffee cup', shape: 'cylinder', size: [0.042, 0.055, 0], mass: 0.25, start: new THREE.Vector3(0.22, 0.42, -0.86), color: 0xf2efe6, accent: 0x6b3f22 },
-  { name: 'pace note book', shape: 'box', size: [0.075, 0.009, 0.105], mass: 0.3, start: new THREE.Vector3(0.52, 0.36, -0.78), color: 0xe8742b, accent: 0xf4f0e0 },
+  { name: 'pace note book', shape: 'box', size: [0.075, 0.009, 0.105], mass: 0.3, start: new THREE.Vector3(0.52, 0.36, -0.86), color: 0xe8742b, accent: 0xf4f0e0 },
   { name: 'snack bag', shape: 'box', size: [0.07, 0.025, 0.1], mass: 0.15, start: new THREE.Vector3(-0.1, 0.06, 0.98), color: 0xf2c230, accent: 0xd23a2a },
 ];
 
+/** Flashlight: a cylinder along its local Z axis; the beam shines along -Z. */
+export const FLASHLIGHT_SPEC = { radius: 0.025, halfLength: 0.105, mass: 0.35 };
+/** Clip on the passenger side of the dashboard: lies sideways, lens towards the centre console. */
+export const FLASHLIGHT_HOLDER = {
+  pos: new THREE.Vector3(0.52, 0.362, -0.68),
+  quat: new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2),
+};
+
+/** Folded rally map (half extents) and opened out sheet. */
+export const MAP_SPEC = {
+  folded: { hx: 0.1, hy: 0.007, hz: 0.145 },
+  open: { hx: 0.3, hy: 0.004, hz: 0.21 },
+  mass: 0.12,
+};
+/** Where the map comes out of the glovebox. */
+export const GLOVEBOX_OPENING = new THREE.Vector3(0.38, 0.1, -0.5);
+
+export const CABIN_OBJECT_NAMES = ['TABLET', ...LOOSE_OBJECTS.map((o) => o.name.toUpperCase()), 'FLASHLIGHT', 'PAPER MAP'];
+
 if (LOOSE_OBJECTS.length !== LOOSE_OBJECT_COUNT) throw new Error('LOOSE_OBJECT_COUNT mismatch');
+if (CABIN_BODY.flashlight !== LOOSE_OBJECT_COUNT + 1 || CABIN_BODY.map !== LOOSE_OBJECT_COUNT + 2 || CABIN_BODY_COUNT !== LOOSE_OBJECT_COUNT + 3) {
+  throw new Error('CABIN_BODY index mismatch');
+}

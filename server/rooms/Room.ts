@@ -28,7 +28,7 @@ const randomSeed = () => (Math.random() * 0xffffffff) >>> 0;
 export class Room {
   readonly players: PlayerSlot[] = [];
   phase: RoomPhase = 'lobby';
-  stage: StageParams = { seed: randomSeed(), length: 'medium' };
+  stage: StageParams = { seed: randomSeed(), length: 'medium', night: false };
   private stageData: StageData | null = null;
   private authority: GameAuthority | null = null;
   private countdownEndsAt: number | null = null;
@@ -106,7 +106,7 @@ export class Room {
   /** Call after the join ack: a (re)connecting player rebuilds the running stage. */
   resyncAfterJoin(slot: PlayerSlot) {
     if (this.phase === 'lobby' || slot.loaded || !slot.socket) return;
-    slot.socket.emit('game:load', { seed: this.stage.seed, length: this.stage.length });
+    slot.socket.emit('game:load', { ...this.stage });
   }
 
   detach(slot: PlayerSlot, voluntary: boolean) {
@@ -166,9 +166,13 @@ export class Room {
     }
   }
 
-  setStage(slot: PlayerSlot, length: StageLength, seed?: number) {
+  setStage(slot: PlayerSlot, length: StageLength, seed?: number, night?: boolean) {
     if (this.phase !== 'lobby' || !slot.isHost) return;
-    this.stage = { length, seed: typeof seed === 'number' && Number.isFinite(seed) ? seed >>> 0 : randomSeed() };
+    this.stage = {
+      length,
+      seed: typeof seed === 'number' && Number.isFinite(seed) ? seed >>> 0 : randomSeed(),
+      night: typeof night === 'boolean' ? night : this.stage.night,
+    };
     for (const p of this.players) p.ready = false;
     this.broadcastState();
   }
@@ -184,7 +188,7 @@ export class Room {
     this.raceStartedAt = null;
     this.restartVotes = {};
     for (const p of this.players) p.loaded = false;
-    this.channel.emit('game:load', { seed: this.stage.seed, length: this.stage.length });
+    this.channel.emit('game:load', { ...this.stage });
     this.broadcastState();
     this.loadTimer = setTimeout(() => {
       if (this.phase === 'loading') this.toLobby('Loading timed out');
@@ -243,7 +247,7 @@ export class Room {
     const last = a.lastCarState;
     if (last) s.emit(slot.role === 'driver' ? 'car:correction' : 'car:state', toArrayBuffer(last.slice()));
     s.emit('doors:state', a.doorStates);
-    s.emit('wipers:state', { on: a.wipersOn });
+    s.emit('seats:state', a.seatStates);
     s.emit('tablet:owner', { holder: a.holder });
     s.emit('race:stats', a.stats());
     if (this.phase === 'finished') s.emit('game:results', a.results());
@@ -335,9 +339,19 @@ export class Room {
     if (role) this.authority?.closeDoor(role, side);
   }
 
-  wipers(slot: PlayerSlot, on: boolean) {
+  wiperCycle(slot: PlayerSlot) {
     const role = this.roleOf(slot);
-    if (role) this.authority?.setWipers(role, on);
+    if (role) this.authority?.wiperCycle(role);
+  }
+
+  exitCar(slot: PlayerSlot) {
+    const role = this.roleOf(slot);
+    if (role) this.authority?.exitCar(role);
+  }
+
+  enterCar(slot: PlayerSlot, pos: { x: number; y: number; z: number }) {
+    const role = this.roleOf(slot);
+    if (role) this.authority?.enterCar(role, pos);
   }
 
   tabletGrab(slot: PlayerSlot, held: boolean) {
@@ -386,7 +400,8 @@ export class Room {
       impact: (fx) => ch().emit('fx:impact', fx),
       mud: (fx) => ch().emit('fx:mud', fx),
       doors: (d) => ch().emit('doors:state', d),
-      wipers: (on) => ch().emit('wipers:state', { on }),
+      wiperCycle: () => ch().emit('wipers:cycle'),
+      seats: (seats) => ch().emit('seats:state', seats),
       callout: (msg) => ch().emit('callout', msg),
       teleport: (p) => ch().emit('car:teleport', p),
       correction: (buf) => driverSocket()?.emit('car:correction', toArrayBuffer(buf)),

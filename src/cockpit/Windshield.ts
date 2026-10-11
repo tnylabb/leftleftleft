@@ -32,9 +32,10 @@ export class Windshield {
   private dirty = true;
   private uploadTimer = 0;
   private wipers: Wiper[] = [];
+  /** 0..1 progress through one sweep (out and back); only advances while a cycle runs. */
   private phase = 0;
   private running = false;
-  private stopping = false;
+  private queued = false;
   /** Fraction of the glass covered by mud (measured from the canvas). */
   coverage = 0;
 
@@ -153,11 +154,15 @@ export class Windshield {
     this.dirty = true;
   }
 
-  setWipers(on: boolean) {
-    if (on) {
+  /**
+   * Starts one complete wiping cycle (out and back to the rest position).
+   * A trigger during the return stroke queues exactly one more cycle.
+   */
+  triggerCycle() {
+    if (!this.running) {
       this.running = true;
-      this.stopping = false;
-    } else if (this.running) this.stopping = true;
+      this.phase = 0;
+    } else if (this.phase > 0.5) this.queued = true;
   }
 
   get wipersActive(): boolean {
@@ -168,11 +173,16 @@ export class Windshield {
     if (this.running) {
       const prev = this.phase;
       this.phase += dt / 1.15;
-      if (Math.floor(this.phase * 2) !== Math.floor(prev * 2)) this.events.wiperEnd();
-      if (this.stopping && Math.floor(this.phase) !== Math.floor(prev)) {
-        this.running = false;
-        this.stopping = false;
-        this.phase = 0;
+      if (prev < 0.5 && this.phase >= 0.5) this.events.wiperEnd();
+      if (this.phase >= 1) {
+        this.events.wiperEnd();
+        if (this.queued) {
+          this.queued = false;
+          this.phase -= 1;
+        } else {
+          this.running = false;
+          this.phase = 0;
+        }
       }
     }
     const t = this.running ? (1 - Math.cos(this.phase * Math.PI * 2)) / 2 : 0;

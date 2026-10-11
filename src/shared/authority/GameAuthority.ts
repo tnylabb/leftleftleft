@@ -7,6 +7,16 @@
 
 import {
   CABIN_BOUNDS,
+  CAR_HOOKS,
+  DOOR_EXIT,
+  ENTER_RADIUS,
+  EXIT_MAX_SPEED,
+  FOOT_MAX_DISTANCE,
+  GRIP_REACH,
+  PULL_FORCE_MAX,
+  RESET_PENALTY_MS,
+  STUCK_SECONDS,
+  WIPER_COOLDOWN_MS,
   CALLOUT_COOLDOWN_MS,
   MAX_CAR_SPEED,
   MAX_TELEPORT_SLACK,
@@ -19,7 +29,7 @@ import type { ImpactReport, MudReport } from '../protocol';
 import { clamp, isFiniteArray, rotateByQuat } from '../math';
 import { RaceTracker } from '../race/RaceTracker';
 import { Rng, hash2 } from '../rng';
-import { CABIN, CABIN_FLAG, CAR } from '../snapshot';
+import { CABIN, CABIN_FLAG, CAR, CAR_FLAG } from '../snapshot';
 import { brakingDistance } from '../stage/pacenotes';
 import { stageStartPose } from '../stage/StageGenerator';
 import type {
@@ -34,6 +44,7 @@ import type {
   RaceResults,
   RaceStats,
   Role,
+  SeatStates,
   StageData,
 } from '../types';
 
@@ -43,7 +54,9 @@ export interface AuthorityOutput {
   impact(fx: ImpactFx): void;
   mud(fx: MudFx): void;
   doors(d: DoorStates): void;
-  wipers(on: boolean): void;
+  /** One windscreen wiper sweep (out and back), shown on both screens. */
+  wiperCycle(): void;
+  seats(s: SeatStates): void;
   callout(msg: CalloutMsg): void;
   teleport(p: Pose): void;
   correction(buf: Float32Array): void;
@@ -80,7 +93,10 @@ export class GameAuthority {
   private tabletDrops = 0;
   private lastDropAt = -Infinity;
   private doors: DoorStates = { left: false, right: false };
-  private wipers = false;
+  private lastWiperAt = -Infinity;
+  private seats: SeatStates = { driver: true, navigator: true };
+  private resets = 0;
+  private resetPenaltyMs = 0;
   private tabletHolder: Role | null = null;
   private rng: Rng;
   private puddleUsedAt = new Map<number, number>();
@@ -156,8 +172,16 @@ export class GameAuthority {
     return { ...this.doors };
   }
 
-  get wipersOn(): boolean {
-    return this.wipers;
+  get seatStates(): SeatStates {
+    return { ...this.seats };
+  }
+
+  /** Car-local point -> world, using the last validated car pose. */
+  private carPointToWorld(p: { x: number; y: number; z: number }): { x: number; y: number; z: number } | null {
+    const s = this.lastState;
+    if (!s) return null;
+    const r = rotateByQuat(p, { x: s[CAR.qx], y: s[CAR.qy], z: s[CAR.qz], w: s[CAR.qw] });
+    return { x: r.x + s[CAR.px], y: r.y + s[CAR.py], z: r.z + s[CAR.pz] };
   }
 
   get holder(): Role | null {
@@ -211,6 +235,13 @@ export class GameAuthority {
     }
     this.pendingTeleport = null;
     this.violations = 0;
+    // seat state is server-owned: the driver can only be "out" if the server let them out
+    const flags = buf[CAR.flags] | 0;
+    if (!this.seats.driver !== !!(flags & CAR_FLAG.driverOut)) {
+      buf[CAR.flags] = this.seats.driver ? flags & ~CAR_FLAG.driverOut : flags | CAR_FLAG.driverOut;
+    }
+    if (!this.seats.driver) this.sanitizeFoot(buf, CAR.footX, CAR.footGrip, { x, y, z });
+    else buf[CAR.footGrip] = -1;
     const dt = this.lastState ? clamp((now - this.lastStateTime) / 1000, 0, 0.5) : 0;
     this.lastState = buf;
     this.lastStateTime = now;
@@ -223,6 +254,34 @@ export class GameAuthority {
       this.evaluateCarContext(buf, dt, speed);
     }
     return buf;
+  }
+
+  /**
+   * Keeps an on-foot player near the car and only lets them grip a tow hook
+   * they are actually standing next to. Returns whether the grip is valid.
+   */
+  private sanitizeFoot(buf: Float32Array, o: number, gripIdx: number, car: { x: number; y: number; z: number }): boolean {
+    const dx = buf[o] - car.x;
+    const dy = buf[o + 1] - car.y;
+    const dz = buf[o + 2] - car.z;
+    const d = Math.hypot(dx, dy, dz);
+    if (d > FOOT_MAX_DISTANCE) {
+      const k = FOOT_MAX_DISTANCE / d;
+      buf[o] = car.x + dx * k;
+      buf[o + 1] = car.y + dy * k;
+      buf[o + 2] = car.z + dz * k;
+    }
+    const grip = Math.round(buf[gripIdx]);
+    if (grip < 0 || grip >= CAR_HOOKS.length) {
+      buf[gripIdx] = -1;
+      return false;
+    }
+    const hook = this.carPointToWorld(CAR_HOOKS[grip]);
+    if (!hook || Math.hypot(buf[o] - hook.x, buf[o + 2] - hook.z) > GRIP_REACH + 0.6) {
+      buf[gripIdx] = -1;
+      return false;
+    }
+    return true;
   }
 
   private reject(): null {
@@ -282,23 +341,30 @@ export class GameAuthority {
       } else if (Math.sign(steer) === ld.dir && Math.abs(steer) > 0.12) ld.answered = true;
     }
 
-    // stuck / flipped detection
+    // Stuck: the driver keeps asking for drive (or reverse) but the car does not
+    // move. Normal stops and slow driving never count: no pedal = no stuck timer.
     const up = rotateByQuat({ x: 0, y: 1, z: 0 }, { x: buf[CAR.qx], y: buf[CAR.qy], z: buf[CAR.qz], w: buf[CAR.qw] });
     if (up.y < 0.3) this.flippedTime += dt;
     else this.flippedTime = 0;
-    if (speed < 0.9 && (throttle > 0.5 || buf[CAR.brake] > 0.5)) this.stuckTime += dt;
-    else if (speed > 2) {
+    const pedal = Math.max(throttle, buf[CAR.brake]);
+    if (this.seats.driver && speed < 0.6 && pedal > 0.5) this.stuckTime += dt;
+    else if (speed > 1.5) {
       this.stuckTime = 0;
       this.stuckHinted = false;
     }
-    if (!this.stuckHinted && (this.stuckTime > 5 || this.flippedTime > 2)) {
+    if (!this.stuckHinted && (this.stuckTime > STUCK_SECONDS || this.flippedTime > 2)) {
       this.stuckHinted = true;
-      this.out.raceEvent({ type: 'stuck' });
-      this.out.hint('STUCK? PRESS R TO RESET THE CAR');
+      const flipped = this.flippedTime > 2;
+      this.out.raceEvent({ type: 'stuck', flipped });
+      this.out.hint(
+        flipped
+          ? 'FLIPPED! HOLD R FOR AN EMERGENCY RESET (+5 s)'
+          : 'STUCK! GET OUT AND PULL THE CAR FREE BY ITS TOW HOOKS',
+      );
     }
-    if (this.flippedTime > 5) {
+    if (this.flippedTime > 6) {
       this.flippedTime = 0;
-      this.issueReset();
+      this.issueReset(true);
     }
 
     // rough terrain can shake a door open
@@ -311,16 +377,26 @@ export class GameAuthority {
     }
   }
 
+  /** Emergency reset (last resort, costs time). Only the driver can call it. */
   requestReset(role: Role): boolean {
     if (role !== 'driver' || this.phase === 'finished') return false;
     if (this.now() - this.lastResetAt < RESET_COOLDOWN_MS) return false;
-    this.issueReset();
+    this.issueReset(this.phase === 'racing');
     return true;
   }
 
-  private issueReset() {
+  private issueReset(penalize = false) {
     const s = this.stage;
     this.lastResetAt = this.now();
+    if (penalize) {
+      this.resets++;
+      this.resetPenaltyMs += RESET_PENALTY_MS;
+    }
+    // everybody is put back into their seat
+    if (!this.seats.driver || !this.seats.navigator) {
+      this.seats = { driver: true, navigator: true };
+      this.out.seats(this.seatStates);
+    }
     let i: number;
     if (this.phase === 'countdown' || !this.lastState) i = s.startIdx;
     else i = Math.max(s.startIdx, Math.min(s.finishIdx - 2, Math.floor(this.tracker.loc.idx) - 3));
@@ -415,10 +491,37 @@ export class GameAuthority {
     this.out.doors(this.doorStates);
   }
 
-  setWipers(role: Role, on: boolean) {
-    if (role !== 'driver') return;
-    this.wipers = !!on;
-    this.out.wipers(this.wipers);
+  /** One manual wiper sweep (the driver flicks the stalk). */
+  wiperCycle(role: Role) {
+    if (role !== 'driver' || !this.seats.driver) return;
+    const now = this.now();
+    if (now - this.lastWiperAt < WIPER_COOLDOWN_MS) return;
+    this.lastWiperAt = now;
+    this.out.wiperCycle();
+  }
+
+  /** A player gets out. Only allowed once the car has (almost) stopped. */
+  exitCar(role: Role): boolean {
+    if (this.phase === 'countdown' || !this.seats[role] || !this.lastState) return false;
+    const speed = Math.hypot(this.lastState[CAR.vx], this.lastState[CAR.vy], this.lastState[CAR.vz]);
+    if (speed > EXIT_MAX_SPEED) {
+      this.out.hint(role === 'driver' ? 'STOP THE CAR BEFORE GETTING OUT' : 'WAIT UNTIL THE CAR HAS STOPPED');
+      return false;
+    }
+    this.seats = { ...this.seats, [role]: false };
+    if (role === 'navigator' && this.tabletHolder) this.tabletGrab('navigator', false);
+    this.out.seats(this.seatStates);
+    return true;
+  }
+
+  /** A player on foot climbs back into their own seat when standing at their door. */
+  enterCar(role: Role, pos: { x: number; y: number; z: number }): boolean {
+    if (this.seats[role] || ![pos.x, pos.y, pos.z].every(Number.isFinite)) return false;
+    const door = this.carPointToWorld(DOOR_EXIT[role]);
+    if (!door || Math.hypot(pos.x - door.x, pos.z - door.z) > ENTER_RADIUS + 0.5) return false;
+    this.seats = { ...this.seats, [role]: true };
+    this.out.seats(this.seatStates);
+    return true;
   }
 
   tabletGrab(role: Role, held: boolean) {
@@ -452,8 +555,26 @@ export class GameAuthority {
     clampPose(CABIN.tablet);
     for (let i = 0; i < (CABIN.reachX - CABIN.objects) / 7; i++) clampPose(CABIN.objects + i * 7);
     // ownership: the tablet can only be shown as held if the server granted it
-    const flags = buf[CABIN.flags] | 0;
-    if (flags & CABIN_FLAG.tabletHeld && this.tabletHolder !== 'navigator') buf[CABIN.flags] = flags & ~CABIN_FLAG.tabletHeld;
+    let flags = buf[CABIN.flags] | 0;
+    if (flags & CABIN_FLAG.tabletHeld && this.tabletHolder !== 'navigator') flags &= ~CABIN_FLAG.tabletHeld;
+    // seat state is server-owned; on foot the navigator must stay near the car and
+    // can only pull on a tow hook they are standing next to, with a human-sized force
+    const out = !this.seats.navigator;
+    flags = out ? flags | CABIN_FLAG.navOut : flags & ~CABIN_FLAG.navOut;
+    buf[CABIN.flags] = flags;
+    const s = this.lastState;
+    let gripOk = false;
+    if (out && s) gripOk = this.sanitizeFoot(buf, CABIN.footX, CABIN.footGrip, { x: s[CAR.px], y: s[CAR.py], z: s[CAR.pz] });
+    else buf[CABIN.footGrip] = -1;
+    const f = Math.hypot(buf[CABIN.pullX], buf[CABIN.pullY], buf[CABIN.pullZ]);
+    if (!gripOk) buf[CABIN.pullX] = buf[CABIN.pullY] = buf[CABIN.pullZ] = 0;
+    else if (f > PULL_FORCE_MAX) {
+      const k = PULL_FORCE_MAX / f;
+      buf[CABIN.pullX] *= k;
+      buf[CABIN.pullY] *= k;
+      buf[CABIN.pullZ] *= k;
+    }
+    buf[CABIN.mapFold] = clamp(buf[CABIN.mapFold], 0, 1);
     return buf;
   }
 
@@ -506,7 +627,8 @@ export class GameAuthority {
       crashes: this.crashes,
       missedTurns: t.missedTurns,
       tabletDrops: this.tabletDrops,
-      penaltiesMs: t.penaltiesMs,
+      resets: this.resets,
+      penaltiesMs: t.penaltiesMs + this.resetPenaltyMs,
       topSpeed: t.topSpeed,
       wrongWay: t.wrongWay,
     };
@@ -530,6 +652,7 @@ export class GameAuthority {
     else if (s.crashes >= 8) title = 'Demolition Duo';
     else if (s.missedTurns >= 4) title = 'Scenic Route Enthusiasts';
     else if (s.tabletDrops >= 4) title = 'Butterfingers Navigation Co.';
+    else if (s.resets >= 3) title = 'Tow Truck Regulars';
     else if (grade === 'A') title = 'Gravel Gladiators';
     else if (s.crashes === 0) title = 'Careful Commuters';
     else if (grade === 'D') title = 'Lost In The Woods';

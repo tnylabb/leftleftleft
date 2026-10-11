@@ -2,41 +2,67 @@
 // (world gravity - car acceleration) rotated into the car frame, so cornering,
 // braking, bumps, jumps (weightless!) and crashes throw loose objects around
 // without them ever tunnelling through a fast-moving car.
+//
+// The navigator has two "hands": the main slot (tablet, paper map or a small
+// object, held with both hands or the left hand alone) and the torch slot
+// (the flashlight, always in the right hand).
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { LAYOUT } from '../cockpit/layout';
-import { CABIN_BOUNDS, FIXED_DT } from '../shared/constants';
+import { CABIN_BODY, CABIN_BOUNDS, FIXED_DT } from '../shared/constants';
 import { clamp } from '../shared/math';
-import { LOOSE_OBJECTS, TABLET_SPEC } from '../tablet/cabinObjects';
+import {
+  FLASHLIGHT_HOLDER,
+  FLASHLIGHT_SPEC,
+  GLOVEBOX_OPENING,
+  LOOSE_OBJECTS,
+  MAP_SPEC,
+  TABLET_SPEC,
+} from '../tablet/cabinObjects';
 
 export type DropReason = 'impact' | 'gforce' | 'snag' | 'released';
 
 export interface CabinCallbacks {
   contact(index: number, strength: number): void;
-  dropped(reason: DropReason): void;
+  /** An object fell out of the navigator's hands (not called for deliberate releases). */
+  dropped(index: number, reason: DropReason): void;
 }
 
 const _q = new THREE.Quaternion();
 const _q2 = new THREE.Quaternion();
 const _v = new THREE.Vector3();
 const _axis = new THREE.Vector3();
+const TABLET_START_QUAT = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.5);
+
+interface HandSlot {
+  index: number;
+  pos: THREE.Vector3;
+  quat: THREE.Quaternion;
+  grip: number;
+  errorTime: number;
+}
 
 export class CabinPhysics {
   readonly world: RAPIER.World;
   private events: RAPIER.EventQueue;
-  /** index 0 = tablet, 1.. = loose objects */
+  /** index 0 = tablet, 1..4 loose objects, 5 flashlight, 6 paper map */
   readonly bodies: RAPIER.RigidBody[] = [];
+  private colliders: RAPIER.Collider[] = [];
   private colliderIndex = new Map<number, number>();
   readonly prevPos: THREE.Vector3[] = [];
   readonly prevQuat: THREE.Quaternion[] = [];
   readonly currPos: THREE.Vector3[] = [];
   readonly currQuat: THREE.Quaternion[] = [];
-  held = -1;
-  readonly holdPos = new THREE.Vector3();
-  readonly holdQuat = new THREE.Quaternion();
-  grip = 100;
-  private holdErrorTime = 0;
+  private main: HandSlot = { index: -1, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), grip: 100, errorTime: 0 };
+  private torch: HandSlot = { index: -1, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), grip: 100, errorTime: 0 };
+  /** The main object is held by the left hand only (right hand busy). */
+  oneHanded = false;
+  /** Extra grip drain multiplier for awkward objects (an open map at speed). */
+  awkwardness = 1;
+  flashlightStowed = true;
+  mapStowed = true;
+  mapOpen = false;
   private lastContact: number[] = [];
   private time = 0;
   private regrabBlockedUntil = 0;
@@ -48,6 +74,19 @@ export class CabinPhysics {
     this.events = new RAPIER.EventQueue(true);
     this.buildStatic();
     this.buildDynamic();
+  }
+
+  /** Main-hand object index (-1 = none). Kept as `held` for existing callers. */
+  get held(): number {
+    return this.main.index;
+  }
+
+  get grip(): number {
+    return this.main.grip;
+  }
+
+  get torchHeld(): boolean {
+    return this.torch.index >= 0;
   }
 
   private addBox(hx: number, hy: number, hz: number, x: number, y: number, z: number, rx = 0, friction = 0.7) {
@@ -103,7 +142,7 @@ export class CabinPhysics {
     this.addDynamic(
       RAPIER.ColliderDesc.cuboid(t.hx, t.hy, t.hz).setMass(t.mass).setFriction(0.55).setRestitution(0.22),
       LAYOUT.navLap.clone(),
-      new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.5),
+      TABLET_START_QUAT.clone(),
     );
     for (const o of LOOSE_OBJECTS) {
       const desc =
@@ -113,6 +152,26 @@ export class CabinPhysics {
       desc.setMass(o.mass).setFriction(0.6).setRestitution(o.name === 'water bottle' ? 0.35 : 0.2);
       this.addDynamic(desc, o.start.clone(), new THREE.Quaternion());
     }
+    // flashlight: cylinder along local Z
+    const f = FLASHLIGHT_SPEC;
+    this.addDynamic(
+      RAPIER.ColliderDesc.cylinder(f.halfLength, f.radius)
+        .setRotation(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2))
+        .setMass(f.mass)
+        .setFriction(0.6)
+        .setRestitution(0.25),
+      FLASHLIGHT_HOLDER.pos.clone(),
+      FLASHLIGHT_HOLDER.quat.clone(),
+    );
+    // paper map (starts folded, inside the glovebox)
+    const m = MAP_SPEC.folded;
+    this.addDynamic(
+      RAPIER.ColliderDesc.cuboid(m.hx, m.hy, m.hz).setMass(MAP_SPEC.mass).setFriction(0.8).setRestitution(0.05),
+      GLOVEBOX_OPENING.clone(),
+      new THREE.Quaternion(),
+    );
+    this.stowFlashlight();
+    this.stowMap();
   }
 
   private addDynamic(desc: RAPIER.ColliderDesc, pos: THREE.Vector3, quat: THREE.Quaternion) {
@@ -129,6 +188,7 @@ export class CabinPhysics {
     const c = this.world.createCollider(desc, body);
     const index = this.bodies.length;
     this.colliderIndex.set(c.handle, index);
+    this.colliders.push(c);
     this.bodies.push(body);
     this.prevPos.push(pos.clone());
     this.currPos.push(pos.clone());
@@ -137,75 +197,177 @@ export class CabinPhysics {
     this.lastContact.push(0);
   }
 
+  private place(i: number, pos: THREE.Vector3, quat: THREE.Quaternion) {
+    const b = this.bodies[i];
+    b.setTranslation(pos, true);
+    b.setRotation(quat, true);
+    b.setLinvel({ x: 0, y: 0, z: 0 }, true);
+    b.setAngvel({ x: 0, y: 0, z: 0 }, true);
+    this.prevPos[i].copy(pos);
+    this.currPos[i].copy(pos);
+    this.prevQuat[i].copy(quat);
+    this.currQuat[i].copy(quat);
+  }
+
+  // --- flashlight holder ------------------------------------------------------------
+
+  /** Clips the flashlight into its dashboard holder (kinematic: it rides with the car). */
+  stowFlashlight() {
+    const i = CABIN_BODY.flashlight;
+    if (this.torch.index === i) this.torch.index = -1;
+    this.bodies[i].setBodyType(RAPIER.RigidBodyType.KinematicPositionBased, true);
+    this.place(i, FLASHLIGHT_HOLDER.pos, FLASHLIGHT_HOLDER.quat);
+    this.flashlightStowed = true;
+  }
+
+  private unstowFlashlight() {
+    if (!this.flashlightStowed) return;
+    this.bodies[CABIN_BODY.flashlight].setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+    this.flashlightStowed = false;
+  }
+
+  // --- glovebox map ------------------------------------------------------------------
+
+  /** The map lives in the closed glovebox: no simulation, no collisions. */
+  stowMap() {
+    const i = CABIN_BODY.map;
+    if (this.main.index === i) this.main.index = -1;
+    this.setMapOpen(false);
+    this.place(i, GLOVEBOX_OPENING.clone().add(new THREE.Vector3(0, 0, -0.12)), new THREE.Quaternion());
+    this.bodies[i].setEnabled(false);
+    this.mapStowed = true;
+  }
+
+  private unstowMap() {
+    if (!this.mapStowed) return;
+    const i = CABIN_BODY.map;
+    this.bodies[i].setEnabled(true);
+    this.place(i, GLOVEBOX_OPENING, new THREE.Quaternion());
+    this.mapStowed = false;
+  }
+
+  /** Opens / folds the paper map: the physical collider changes size too. */
+  setMapOpen(open: boolean) {
+    if (this.mapOpen === open) return;
+    this.mapOpen = open;
+    const s = open ? MAP_SPEC.open : MAP_SPEC.folded;
+    this.colliders[CABIN_BODY.map].setShape(new RAPIER.Cuboid(s.hx, s.hy, s.hz));
+    this.colliders[CABIN_BODY.map].setMass(MAP_SPEC.mass);
+  }
+
   /** Puts everything back to its start position (new stage / reset). */
   reset() {
-    this.release('released', false);
+    this.releaseAll();
     const starts = [LAYOUT.navLap, ...LOOSE_OBJECTS.map((o) => o.start)];
-    this.bodies.forEach((b, i) => {
-      const p = starts[i];
-      const q = i === 0 ? new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), 0.5) : new THREE.Quaternion();
-      b.setTranslation(p, true);
-      b.setRotation(q, true);
-      b.setLinvel({ x: 0, y: 0, z: 0 }, true);
-      b.setAngvel({ x: 0, y: 0, z: 0 }, true);
-      this.prevPos[i].copy(p);
-      this.currPos[i].copy(p);
-      this.prevQuat[i].copy(q);
-      this.currQuat[i].copy(q);
-    });
-    this.grip = 100;
+    for (let i = 0; i < starts.length; i++) this.place(i, starts[i], i === 0 ? TABLET_START_QUAT : new THREE.Quaternion());
+    this.stowFlashlight();
+    this.stowMap();
+    this.main.grip = 100;
   }
 
   canGrab(): boolean {
     return this.time >= this.regrabBlockedUntil;
   }
 
+  /** Takes an object into the right slot (flashlight -> torch hand, everything else -> main). */
   grab(index: number): boolean {
     if (index < 0 || index >= this.bodies.length || !this.canGrab()) return false;
-    if (this.held >= 0) this.release('released', false);
-    this.held = index;
-    this.grip = 100;
-    this.holdErrorTime = 0;
+    if (index === CABIN_BODY.flashlight) {
+      this.unstowFlashlight();
+      this.torch.index = index;
+      this.torch.grip = 100;
+      this.torch.errorTime = 0;
+      this.bodies[index].setGravityScale(0, true);
+      return true;
+    }
+    if (index === CABIN_BODY.map) this.unstowMap();
+    if (this.main.index >= 0) this.release('released', false);
+    this.main.index = index;
+    this.main.grip = 100;
+    this.main.errorTime = 0;
     this.bodies[index].setGravityScale(0, true);
     return true;
   }
 
+  /** Releases the main-hand object. */
   release(reason: DropReason, notify = true) {
-    if (this.held < 0) return;
-    const b = this.bodies[this.held];
-    b.setGravityScale(1, true);
-    const wasTablet = this.held === 0;
-    this.held = -1;
+    this.releaseSlot(this.main, reason, notify);
+  }
+
+  releaseTorch(reason: DropReason, notify = true) {
+    this.releaseSlot(this.torch, reason, notify);
+  }
+
+  releaseAll() {
+    this.releaseSlot(this.main, 'released', false);
+    this.releaseSlot(this.torch, 'released', false);
+  }
+
+  private releaseSlot(slot: HandSlot, reason: DropReason, notify: boolean) {
+    if (slot.index < 0) return;
+    const i = slot.index;
+    this.bodies[i].setGravityScale(1, true);
+    slot.index = -1;
     if (reason !== 'released') this.regrabBlockedUntil = this.time + 0.6;
-    if (notify && wasTablet) this.cb.dropped(reason);
+    if (notify && reason !== 'released') this.cb.dropped(i, reason);
   }
 
   setHoldTarget(pos: THREE.Vector3, quat: THREE.Quaternion) {
-    this.holdPos.copy(pos);
-    this.holdQuat.copy(quat);
+    this.main.pos.copy(pos);
+    this.main.quat.copy(quat);
+  }
+
+  setTorchTarget(pos: THREE.Vector3, quat: THREE.Quaternion) {
+    this.torch.pos.copy(pos);
+    this.torch.quat.copy(quat);
   }
 
   /** Impact shock: `dir` points (car-local) towards where the car was hit. */
   shock(dir: THREE.Vector3, strength: number) {
     const s = Math.min(strength, 16);
     this.bodies.forEach((b, i) => {
-      if (i === this.held) return;
+      if (i === this.main.index || i === this.torch.index || !b.isDynamic() || !b.isEnabled()) return;
       const lv = b.linvel();
       const k = s * (0.7 + Math.random() * 0.4);
       b.setLinvel({ x: lv.x + dir.x * k, y: lv.y + dir.y * k + s * 0.15, z: lv.z + dir.z * k }, true);
       const av = b.angvel();
       b.setAngvel({ x: av.x + (Math.random() - 0.5) * s * 3, y: av.y + (Math.random() - 0.5) * s * 3, z: av.z + (Math.random() - 0.5) * s * 3 }, true);
     });
-    if (this.held >= 0) {
-      this.grip -= s * 17;
-      if (s > 6.5 || this.grip <= 0) {
-        const b = this.bodies[this.held];
-        this.release('impact');
+    const knock = (slot: HandSlot, factor: number, release: () => void) => {
+      if (slot.index < 0) return;
+      slot.grip -= s * 17 * factor;
+      if (s > 6.5 / factor || slot.grip <= 0) {
+        const b = this.bodies[slot.index];
+        release();
         const k = s * 0.8;
         const lv = b.linvel();
         b.setLinvel({ x: lv.x + dir.x * k, y: lv.y + dir.y * k + 0.5, z: lv.z + dir.z * k }, true);
       }
-    }
+    };
+    knock(this.main, this.oneHanded ? 1.6 : 1, () => this.release('impact'));
+    knock(this.torch, 0.6, () => this.releaseTorch('impact'));
+  }
+
+  private driveSlot(slot: HandSlot, gravity: THREE.Vector3, dt: number, maxV: number) {
+    const b = this.bodies[slot.index];
+    const p = b.translation();
+    _v.set(slot.pos.x - p.x, slot.pos.y - p.y, slot.pos.z - p.z);
+    const err = _v.length();
+    // hands sway with the g-forces while holding
+    _v.addScaledVector(gravity, 0.0015).add(new THREE.Vector3(0, 9.81 * 0.0015, 0));
+    const lv = _v.multiplyScalar(14);
+    if (lv.length() > maxV) lv.setLength(maxV);
+    b.setLinvel(lv, true);
+    const r = b.rotation();
+    _q.set(r.x, r.y, r.z, r.w);
+    _q2.copy(slot.quat).multiply(_q.invert());
+    if (_q2.w < 0) _q2.set(-_q2.x, -_q2.y, -_q2.z, -_q2.w);
+    const angle = 2 * Math.acos(clamp(_q2.w, -1, 1));
+    const sinHalf = Math.sqrt(Math.max(1e-9, 1 - _q2.w * _q2.w));
+    _axis.set(_q2.x / sinHalf, _q2.y / sinHalf, _q2.z / sinHalf);
+    const w = Math.min(angle * 12, 12);
+    b.setAngvel(angle > 1e-4 ? { x: _axis.x * w, y: _axis.y * w, z: _axis.z * w } : { x: 0, y: 0, z: 0 }, true);
+    slot.errorTime = err > 0.22 ? slot.errorTime + dt : 0;
   }
 
   /** Steps the cabin with the effective gravity (car-local, m/s^2). */
@@ -214,36 +376,23 @@ export class CabinPhysics {
     this.gravity.copy(gravity);
     this.world.gravity = { x: gravity.x, y: gravity.y, z: gravity.z };
 
-    if (this.held >= 0) {
-      // grip drains under sustained g-forces
-      const horiz = Math.hypot(gravity.x, gravity.z);
-      const vert = Math.abs(gravity.y + 9.81);
-      const drain = Math.max(0, horiz - 4.6) * 7 + Math.max(0, vert - 6.5) * 5;
-      this.grip = clamp(this.grip - drain * dt + (drain === 0 ? 28 * dt : 0), 0, 100);
-      if (this.grip <= 0) this.release('gforce');
+    const horiz = Math.hypot(gravity.x, gravity.z);
+    const vert = Math.abs(gravity.y + 9.81);
+    const drain = Math.max(0, horiz - 4.6) * 7 + Math.max(0, vert - 6.5) * 5;
+    if (this.main.index >= 0) {
+      // grip drains under sustained g-forces; one hand and awkward objects drain faster
+      const k = (this.oneHanded ? 1.7 : 1) * this.awkwardness;
+      const d = drain * k + (this.awkwardness > 1 ? (this.awkwardness - 1) * 4 : 0);
+      this.main.grip = clamp(this.main.grip - d * dt + (d === 0 ? 28 * dt : 0), 0, 100);
+      if (this.main.grip <= 0) this.release('gforce');
     }
-    if (this.held >= 0) {
-      const b = this.bodies[this.held];
-      const p = b.translation();
-      _v.set(this.holdPos.x - p.x, this.holdPos.y - p.y, this.holdPos.z - p.z);
-      const err = _v.length();
-      // hands sway with the g-forces while holding
-      _v.addScaledVector(gravity, 0.0015).add(new THREE.Vector3(0, 9.81 * 0.0015, 0));
-      const lv = _v.multiplyScalar(14);
-      const maxV = 3.2;
-      if (lv.length() > maxV) lv.setLength(maxV);
-      b.setLinvel(lv, true);
-      const r = b.rotation();
-      _q.set(r.x, r.y, r.z, r.w);
-      _q2.copy(this.holdQuat).multiply(_q.invert());
-      if (_q2.w < 0) _q2.set(-_q2.x, -_q2.y, -_q2.z, -_q2.w);
-      const angle = 2 * Math.acos(clamp(_q2.w, -1, 1));
-      const sinHalf = Math.sqrt(Math.max(1e-9, 1 - _q2.w * _q2.w));
-      _axis.set(_q2.x / sinHalf, _q2.y / sinHalf, _q2.z / sinHalf);
-      const w = Math.min(angle * 12, 12);
-      b.setAngvel(angle > 1e-4 ? { x: _axis.x * w, y: _axis.y * w, z: _axis.z * w } : { x: 0, y: 0, z: 0 }, true);
-      this.holdErrorTime = err > 0.22 ? this.holdErrorTime + dt : 0;
-      if (this.holdErrorTime > 0.45) this.release('snag');
+    if (this.main.index >= 0) {
+      this.driveSlot(this.main, gravity, dt, 3.2);
+      if (this.main.errorTime > 0.45) this.release('snag');
+    }
+    if (this.torch.index >= 0) {
+      this.driveSlot(this.torch, gravity, dt, 4);
+      if (this.torch.errorTime > 0.6) this.releaseTorch('snag');
     }
 
     for (let i = 0; i < this.bodies.length; i++) {
@@ -266,15 +415,18 @@ export class CabinPhysics {
     const b = CABIN_BOUNDS;
     for (let i = 0; i < this.bodies.length; i++) {
       const body = this.bodies[i];
+      if (!body.isEnabled()) continue;
       const t = body.translation();
       // safety net: anything that escaped the cabin goes back into the footwell
       if (t.x < b.minX - 0.2 || t.x > b.maxX + 0.2 || t.y < b.minY - 0.2 || t.y > b.maxY + 0.2 || t.z < b.minZ - 0.2 || t.z > b.maxZ + 0.2) {
         body.setTranslation({ x: 0.4, y: 0.0, z: -0.4 }, true);
         body.setLinvel({ x: 0, y: 0, z: 0 }, true);
-        if (i === this.held) this.release('snag');
+        if (i === this.main.index) this.release('snag');
+        if (i === this.torch.index) this.releaseTorch('snag');
       }
       const r = body.rotation();
-      this.currPos[i].set(body.translation().x, body.translation().y, body.translation().z);
+      const tt = body.translation();
+      this.currPos[i].set(tt.x, tt.y, tt.z);
       this.currQuat[i].set(r.x, r.y, r.z, r.w);
     }
   }
@@ -287,6 +439,13 @@ export class CabinPhysics {
     const index = this.colliderIndex.get(hit.collider.handle);
     if (index === undefined) return null;
     return { index, distance: hit.timeOfImpact };
+  }
+
+  /** Distance along a ray to the cabin's fixed geometry (dash, glass, seats...). */
+  castStatic(origin: THREE.Vector3, dir: THREE.Vector3, maxDist: number): number {
+    const ray = new RAPIER.Ray({ x: origin.x, y: origin.y, z: origin.z }, { x: dir.x, y: dir.y, z: dir.z });
+    const hit = this.world.castRay(ray, maxDist, true, RAPIER.QueryFilterFlags.EXCLUDE_DYNAMIC | RAPIER.QueryFilterFlags.EXCLUDE_KINEMATIC);
+    return hit ? hit.timeOfImpact : maxDist;
   }
 
   interpolate(i: number, alpha: number, pos: THREE.Vector3, quat: THREE.Quaternion) {

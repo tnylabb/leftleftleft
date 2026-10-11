@@ -1,6 +1,6 @@
 // Arcade raycast vehicle on a Rapier rigid body: per-wheel spring/damper
 // suspension, slip-angle tyre model with a friction circle, weight transfer,
-// FWD drivetrain, handbrake, surface-dependent grip, impacts and landings.
+// AWD drivetrain (rear-biased), handbrake, surface-dependent grip, impacts and landings.
 
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
@@ -15,9 +15,8 @@ export interface DriveInput {
   brake: number;
   steer: number; // -1 left .. +1 right
   handbrake: boolean;
-  shiftUp: boolean;
-  shiftDown: boolean;
-  manual: boolean;
+  /** Nobody at the wheel (driver out on foot): gearbox in neutral, no drive or engine braking. */
+  neutral: boolean;
   /** 1 = both hands on the wheel, lower when a hand is busy (wiping, doors...). */
   steerAuthority: number;
 }
@@ -87,6 +86,8 @@ export class VehicleController {
   extraYawTorque = 0;
   /** Extra linear drag (bushes, open doors), N per m/s. */
   extraDrag = 0;
+  /** World-space forces from players pulling on the tow hooks; refilled by the game every step. */
+  readonly externalForces: { point: THREE.Vector3; force: THREE.Vector3 }[] = [];
   puddleHit = -1;
 
   readonly prevPos = new THREE.Vector3();
@@ -213,7 +214,7 @@ export class VehicleController {
 
     // --- steering (speed sensitive, rate limited) -------------------------------
     const auth = clamp(input.steerAuthority, 0.2, 1);
-    const sf = Math.pow(clamp(Math.abs(speedFwd) / 30, 0, 1), 0.8);
+    const sf = Math.pow(clamp(Math.abs(speedFwd) / 36, 0, 1), 0.8);
     const maxSteer = lerp(s.maxSteerLow, s.maxSteerHigh, sf) * auth;
     const target = this.frozen ? input.steer * s.maxSteerLow : input.steer * maxSteer;
     const towardsCentre = Math.abs(target) < Math.abs(this.steerAngle) || Math.sign(target) !== Math.sign(this.steerAngle);
@@ -222,15 +223,9 @@ export class VehicleController {
     this.steerAngle += ds;
 
     // --- drivetrain ------------------------------------------------------------------
-    const frontGrounded = this.wheels[0].grounded || this.wheels[1].grounded;
-    const slipping = this.wheelspin || !frontGrounded;
-    const dtIn = {
-      throttle: this.frozen ? input.throttle : input.throttle,
-      brake: input.brake,
-      shiftUp: input.shiftUp,
-      shiftDown: input.shiftDown,
-      manual: input.manual,
-    };
+    const anyGrounded = this.wheels.some((w) => w.grounded);
+    const slipping = this.wheelspin || !anyGrounded;
+    const dtIn = { throttle: input.throttle, brake: input.brake, neutral: input.neutral && !this.frozen };
     let driveForce = this.drivetrain.update(dt, dtIn, speedFwd, slipping);
     let brake = this.drivetrain.brake;
     this.handbrake = input.handbrake;
@@ -304,7 +299,7 @@ export class VehicleController {
       w.spinning = false;
       w.slipLat = 0;
       if (!w.grounded) {
-        const omega = ws.front ? (this.drivetrain.throttle * 40) : 0;
+        const omega = this.drivetrain.throttle * 40;
         w.spin += (speedFwd / s.wheelRadius + omega) * dt;
         continue;
       }
@@ -334,17 +329,19 @@ export class VehicleController {
 
       // longitudinal
       let fLong = 0;
-      if (ws.front) fLong += driveForce * 0.5;
+      // AWD: torque split front/rear; the hydraulic handbrake decouples the rear drive
+      const locked = !ws.front && this.handbrake;
+      if (!locked) fLong += driveForce * (ws.front ? s.frontDriveSplit : 1 - s.frontDriveSplit) * 0.5;
       const cancel = (Math.abs(vLong) * cornerMass) / dt;
       if (brake > 0) {
         const bf = brake * (ws.front ? s.brakeFront : s.brakeRear);
         fLong -= Math.sign(vLong) * Math.min(bf, cancel);
       }
-      const locked = !ws.front && this.handbrake;
       if (locked) fLong -= Math.sign(vLong) * Math.min(maxF * 0.85, cancel);
-      fLong -= vLong * (14 + grip.drag * 0.25);
+      // rolling resistance (nearly constant) + surface drag (grass, mud)
+      fLong -= Math.sign(vLong) * Math.min(Math.abs(vLong) * 14, 40) + vLong * grip.drag * 0.25;
       if (Math.abs(fLong) > maxF) {
-        if (ws.front && Math.abs(driveForce) > 1) {
+        if (!locked && Math.abs(driveForce) > 1) {
           w.spinning = true;
           spin = true;
         }
@@ -378,6 +375,11 @@ export class VehicleController {
     const dragK = s.dragQuadratic * speed + s.dragLinear + this.extraDrag;
     _f.copy(_v).multiplyScalar(-dragK * dt);
     b.applyImpulse(_f, true);
+    // players pulling on the tow hooks (forces combine through the rigid body)
+    for (const e of this.externalForces) {
+      _f.copy(e.force).multiplyScalar(dt);
+      b.applyImpulseAtPoint(_f, e.point, true);
+    }
     if (this.extraYawTorque !== 0) {
       _f.copy(_up).multiplyScalar(this.extraYawTorque * dt);
       b.applyTorqueImpulse(_f, true);

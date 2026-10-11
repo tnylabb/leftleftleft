@@ -40,7 +40,22 @@ export class DoorSim {
     }
   }
 
+  /** Cosmetic swing open and shut when an occupant climbs in or out. */
+  passThrough() {
+    if (!this.latched) return;
+    this.latched = false;
+    this.closing = false;
+    this.angle = 0.03;
+    this.vel = 4.5;
+    this.autoCloseIn = 0.75;
+  }
+  private autoCloseIn = 0;
+
   update(dt: number, accel: THREE.Vector3, speed: number, roughness: number) {
+    if (this.autoCloseIn > 0) {
+      this.autoCloseIn -= dt;
+      if (this.autoCloseIn <= 0) this.closing = true;
+    }
     const s = this.side === 'left' ? -1 : 1;
     if (this.latched) {
       // rattle: small visual jitter + occasional sound on rough ground

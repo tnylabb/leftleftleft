@@ -64,6 +64,8 @@ export class Vegetation {
   private geos = buildGeometries();
   private colliders: RAPIER.Collider[] = [];
   private bushGrid = new Map<number, { x: number; z: number; r: number }[]>();
+  /** Tree trunks and boulders, for on-foot collision (both clients). */
+  private obstacleGrid = new Map<number, { x: number; z: number; r: number }[]>();
 
   constructor(
     private field: TerrainField,
@@ -78,6 +80,26 @@ export class Vegetation {
   }
 
   /** Number of bushes overlapping a circle (used for driving-through-bush drag). */
+  private addObstacle(x: number, z: number, r: number) {
+    const k = this.bushKey(x, z);
+    let list = this.obstacleGrid.get(k);
+    if (!list) this.obstacleGrid.set(k, (list = []));
+    list.push({ x, z, r });
+  }
+
+  /** Tree trunks / boulders within `radius` of (x, z). */
+  obstaclesNear(x: number, z: number, radius: number, out: { x: number; z: number; r: number }[]) {
+    out.length = 0;
+    const cx = Math.floor(x / 8), cz = Math.floor(z / 8);
+    for (let gx = cx - 1; gx <= cx + 1; gx++)
+      for (let gz = cz - 1; gz <= cz + 1; gz++) {
+        const list = this.obstacleGrid.get((gx + 8192) * 16384 + (gz + 8192));
+        if (!list) continue;
+        for (const o of list) if (Math.hypot(o.x - x, o.z - z) < o.r + radius) out.push(o);
+      }
+    return out;
+  }
+
   bushesAt(x: number, z: number, radius: number): number {
     let n = 0;
     const cx = Math.floor(x / 8), cz = Math.floor(z / 8);
@@ -147,15 +169,16 @@ export class Vegetation {
           const conifer = kindNoise.noise(x / 160, z / 160) + (r.next() - 0.5) * 0.6 > -0.1;
           const yaw = r.next() * Math.PI * 2;
           if (d < HW + 3.2) {
-            if (roll < 0.7) {
+            // verge: tall grass and big bushes right at the road edge hide the line through corners
+            if (roll < 0.52) {
               push('grass', x, y - 0.05, z, 0.9 + r.next() * 0.7, yaw, 0, tint.set(0xffffff).multiplyScalar(0.85 + r.next() * 0.3));
               if (r.chance(0.5)) push('grass', x + 0.6, this.field.heightAt(x + 0.6, z + 0.4) - 0.05, z + 0.4, 0.8 + r.next() * 0.6, yaw + 1, 0, tint);
-            } else if (roll < 0.84 && d > HW + 1.7) this.addBush(push, x, y, z, r, tint);
+            } else if (roll < 0.9 && d > HW + 1.4) this.addBush(push, x, y, z, r, tint, 1.35);
             continue;
           }
           if (d < HW + 9) {
-            if (roll < 0.3) this.addBush(push, x, y, z, r, tint);
-            else if (roll < 0.3 + 0.22 * f + 0.06) this.addTree(push, conifer, x, y, z, r, tint, d);
+            if (roll < 0.36) this.addBush(push, x, y, z, r, tint, 1.2);
+            else if (roll < 0.36 + 0.3 * f + 0.1) this.addTree(push, conifer, x, y, z, r, tint, d);
             else if (roll < 0.82) push('grass', x, y - 0.05, z, 0.9 + r.next() * 0.8, yaw, 0, tint.set(0xffffff).multiplyScalar(0.85 + r.next() * 0.3));
             else if (roll < 0.86 && d > HW + 2.5) this.addRock(push, x, y, z, r, tint, true);
             continue;
@@ -214,6 +237,7 @@ export class Vegetation {
     tint.setRGB(1, 1, 1).multiplyScalar(0.8 + r.next() * 0.35);
     if (r.chance(0.2)) tint.lerp(new THREE.Color(0xd8e07a), 0.25);
     push(conifer ? 'conifer' : 'broadleaf', x, y - 0.2, z, scale, r.next() * Math.PI * 2, (r.next() - 0.5) * 0.08, tint);
+    if (d < 120) this.addObstacle(x, z, (conifer ? 0.2 : 0.24) * scale);
     if (this.physics && d < 120) {
       const radius = (conifer ? 0.2 : 0.24) * scale;
       const desc = RAPIER.ColliderDesc.cylinder(1.6, radius).setTranslation(x, y + 1.4, z).setFriction(0.5).setRestitution(0.1);
@@ -223,9 +247,9 @@ export class Vegetation {
 
   private addBush(
     push: (k: Kind, x: number, y: number, z: number, s: number, yaw: number, tilt: number, c: THREE.Color) => void,
-    x: number, y: number, z: number, r: Rng, tint: THREE.Color,
+    x: number, y: number, z: number, r: Rng, tint: THREE.Color, size = 1,
   ) {
-    const scale = 0.7 + r.next() * 0.9;
+    const scale = (0.7 + r.next() * 0.9) * size;
     tint.setRGB(1, 1, 1).multiplyScalar(0.8 + r.next() * 0.35);
     push('bush', x, y - 0.1, z, scale, r.next() * Math.PI * 2, 0, tint);
     const k = this.bushKey(x, z);
@@ -241,6 +265,7 @@ export class Vegetation {
     const scale = 0.5 + r.next() * 0.9;
     tint.setRGB(1, 1, 1).multiplyScalar(0.85 + r.next() * 0.25);
     push('rock', x, y - 0.25 * scale, z, scale, r.next() * Math.PI * 2, r.next() * 0.4, tint);
+    this.addObstacle(x, z, 0.7 * scale);
     if (this.physics && collide) {
       const desc = RAPIER.ColliderDesc.ball(0.85 * scale).setTranslation(x, y - 0.25 * scale, z).setFriction(0.6).setRestitution(0.15);
       this.colliders.push(this.physics.addStatic(desc, 'rock'));
@@ -280,5 +305,6 @@ export class Vegetation {
     if (this.physics) for (const c of this.colliders) this.physics.world.removeCollider(c, false);
     this.colliders = [];
     this.bushGrid.clear();
+    this.obstacleGrid.clear();
   }
 }

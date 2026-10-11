@@ -11,7 +11,11 @@ export class TabletModel {
   readonly group = new THREE.Group();
   readonly screen: THREE.Mesh;
 
-  constructor(screenTexture: THREE.Texture) {
+  /**
+   * The rugged tablet has a transflective (non-backlit) screen: it reads well in
+   * daylight, but at night it is only readable where real light falls on it.
+   */
+  constructor(screenTexture: THREE.Texture, night: boolean) {
     const t = TABLET_SPEC;
     const b = new GeoBuilder()
       .add(new THREE.BoxGeometry(t.hx * 2, t.hy * 2, t.hz * 2), PALETTE.tabletCase, undefined, { shade: 0.05 })
@@ -29,7 +33,18 @@ export class TabletModel {
     this.group.add(body);
     const screenGeo = new THREE.PlaneGeometry(t.hx * 2 - 0.022, t.hz * 2 - 0.02);
     screenGeo.rotateX(-Math.PI / 2); // face +Y, top edge towards -Z
-    this.screen = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: screenTexture, toneMapped: false }));
+    this.screen = new THREE.Mesh(
+      screenGeo,
+      new THREE.MeshLambertMaterial({
+        map: screenTexture,
+        // daylight: a little glow so it reads in the shade; night: purely reflective
+        color: night ? 0x999999 : 0xffffff,
+        emissiveMap: screenTexture,
+        emissive: 0xffffff,
+        emissiveIntensity: night ? 0 : 0.75,
+      }),
+    );
+    this.screen.receiveShadow = true;
     this.screen.position.y = t.hy + 0.0012;
     this.group.add(this.screen);
     setLayer(this.group, LAYER.COCKPIT);

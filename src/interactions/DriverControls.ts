@@ -1,12 +1,18 @@
 // Driver input: keyboard / gamepad driving with smoothing, cockpit actions and
-// head look (mouse with pointer lock, or glance keys in split screen).
+// head look (mouse with pointer lock, or a glance key in split screen).
+// All keys come from core/Bindings so the Tab overlay always matches.
 
+import { DRIVER_KEYS, type BindMode, type DriverKeys } from '../core/Bindings';
 import type { Input } from '../core/Input';
 import type { Settings } from '../core/Settings';
 import { clamp } from '../shared/math';
 import type { DriveInput } from '../vehicle/VehicleController';
 
+/** Seconds R must be held for the emergency reset. */
+export const RESET_HOLD_SECONDS = 1.2;
+
 export class DriverControls {
+  readonly keys: DriverKeys;
   steer = 0;
   throttle = 0;
   brake = 0;
@@ -15,46 +21,74 @@ export class DriverControls {
   lookPitch = 0;
   wiping = false;
   horn = false;
-  shiftUp = false;
-  shiftDown = false;
   /** One-frame action flags (consumed by the game). */
-  toggleWipers = false;
+  wiperCycle = false;
+  exitEnter = false;
   requestReset = false;
   closeDoor = false;
+  /** 0..1 progress of holding the reset key. */
+  resetHold = 0;
+  private resetFired = false;
   private idleLook = 0;
 
   constructor(
     private input: Input,
     private settings: Settings,
-    private split: boolean,
-  ) {}
+    mode: BindMode,
+  ) {
+    this.keys = DRIVER_KEYS[mode];
+  }
 
-  update(dt: number, enabled: boolean, mouseLook: boolean) {
+  private down(k: { codes: string[] } | null): boolean {
+    return !!k && this.input.anyDown(...k.codes);
+  }
+
+  private pressed(k: { codes: string[] } | null): boolean {
+    return !!k && this.input.anyPressed(...k.codes);
+  }
+
+  /** Actions available both in the car and on foot (exit/enter, reset). */
+  private commonActions(dt: number) {
+    const k = this.keys;
+    if (this.pressed(k.exitEnter)) this.exitEnter = true;
+    // emergency reset needs a deliberate hold
+    if (this.down(k.reset) || this.input.gamepad()?.reset) {
+      this.resetHold = Math.min(1, this.resetHold + dt / RESET_HOLD_SECONDS);
+      if (this.resetHold >= 1 && !this.resetFired) {
+        this.resetFired = true;
+        this.requestReset = true;
+      }
+    } else {
+      this.resetHold = 0;
+      this.resetFired = false;
+    }
+  }
+
+  /** In-car update. `onFoot` = the driver is outside (only exit/enter + reset apply here). */
+  update(dt: number, enabled: boolean, mouseLook: boolean, onFoot = false) {
     const i = this.input;
-    this.toggleWipers = this.requestReset = this.closeDoor = this.shiftUp = this.shiftDown = false;
-    if (!enabled) {
+    const k = this.keys;
+    this.wiperCycle = this.requestReset = this.closeDoor = this.exitEnter = false;
+    if (!enabled || onFoot) {
       this.throttle = this.brake = 0;
       this.steer *= 0.8;
       this.handbrake = false;
       this.wiping = false;
       this.horn = false;
+      if (enabled) this.commonActions(dt);
+      else this.resetHold = 0;
       return;
     }
-    const left = this.split ? i.isDown('KeyA') : i.anyDown('KeyA', 'ArrowLeft');
-    const right = this.split ? i.isDown('KeyD') : i.anyDown('KeyD', 'ArrowRight');
-    const up = this.split ? i.isDown('KeyW') : i.anyDown('KeyW', 'ArrowUp');
-    const down = this.split ? i.isDown('KeyS') : i.anyDown('KeyS', 'ArrowDown');
-    let targetSteer = (right ? 1 : 0) - (left ? 1 : 0);
-    let targetThrottle = up ? 1 : 0;
-    let targetBrake = down ? 1 : 0;
-    let hb = i.isDown('Space');
+    let targetSteer = (this.down(k.right) ? 1 : 0) - (this.down(k.left) ? 1 : 0);
+    let targetThrottle = this.down(k.throttle) ? 1 : 0;
+    let targetBrake = this.down(k.brake) ? 1 : 0;
+    let hb = this.down(k.handbrake);
     const gp = i.gamepad();
     if (gp) {
       if (Math.abs(gp.steer) > 0.01) targetSteer = gp.steer;
       targetThrottle = Math.max(targetThrottle, gp.throttle);
       targetBrake = Math.max(targetBrake, gp.brake);
       hb = hb || gp.handbrake;
-      if (gp.reset) this.requestReset = true;
       this.lookYaw = clamp(this.lookYaw - gp.lookX * dt * 2.5, -1.9, 1.9);
     }
     const steerRate = Math.sign(targetSteer) !== Math.sign(this.steer) || targetSteer === 0 ? 9 : 6;
@@ -62,17 +96,12 @@ export class DriverControls {
     this.throttle += clamp(targetThrottle - this.throttle, -dt * 8, dt * 6);
     this.brake += clamp(targetBrake - this.brake, -dt * 10, dt * 8);
     this.handbrake = hb;
-    this.horn = i.isDown('KeyH');
-    this.wiping = i.isDown('KeyC');
-    if (i.wasPressed('KeyV')) this.toggleWipers = true;
-    if (i.wasPressed('KeyR')) this.requestReset = true;
-    if (i.wasPressed('KeyG')) this.closeDoor = true;
-    if (this.settings.data.manualGearbox) {
-      if (i.anyPressed('ShiftLeft', 'KeyE') && !this.split) this.shiftUp = true;
-      if (i.anyPressed('ControlLeft', 'KeyQ') && !this.split) this.shiftDown = true;
-      if (this.split && i.wasPressed('ShiftLeft')) this.shiftUp = true;
-      if (this.split && i.wasPressed('ControlLeft')) this.shiftDown = true;
-    }
+    this.horn = this.down(k.horn);
+    this.wiping = this.down(k.handWipe);
+    // one wiper sweep per press: holding V never repeats
+    if (this.pressed(k.wipers)) this.wiperCycle = true;
+    if (this.pressed(k.closeDoor)) this.closeDoor = true;
+    this.commonActions(dt);
 
     // head look
     const sens = 0.0022 * this.settings.data.mouseSensitivity;
@@ -82,33 +111,28 @@ export class DriverControls {
       this.lookPitch = clamp(this.lookPitch - i.mouseDY * sens * (this.settings.data.invertY ? -1 : 1), -0.9, 0.6);
       moved = true;
     }
-    if (this.split) {
-      // glance keys so the driver can look at the tablet / side windows
-      const glance = (i.isDown('KeyQ') ? 1.1 : 0) - (i.isDown('KeyE') ? 1.1 : 0);
-      if (glance) {
-        this.lookYaw += (glance - this.lookYaw) * clamp(dt * 8, 0, 1);
-        this.lookPitch += (-0.25 - this.lookPitch) * clamp(dt * 8, 0, 1);
-        moved = true;
-      }
+    if (this.down(k.glance)) {
+      // glance over at the navigator's tablet
+      this.lookYaw += (-1.1 - this.lookYaw) * clamp(dt * 8, 0, 1); // negative yaw = look right
+      this.lookPitch += (-0.25 - this.lookPitch) * clamp(dt * 8, 0, 1);
+      moved = true;
     }
     if (moved) this.idleLook = 0;
     else this.idleLook += dt;
-    if (this.settings.data.recenterView && this.idleLook > (this.split ? 0.05 : 1.4)) {
-      const k = clamp(dt * 3, 0, 1);
-      this.lookYaw += (0 - this.lookYaw) * k;
-      this.lookPitch += (0 - this.lookPitch) * k;
+    if (this.settings.data.recenterView && this.idleLook > (k.glance ? 0.05 : 1.4)) {
+      const r = clamp(dt * 3, 0, 1);
+      this.lookYaw += (0 - this.lookYaw) * r;
+      this.lookPitch += (0 - this.lookPitch) * r;
     }
   }
 
-  driveInput(steerAuthority: number, manual: boolean): DriveInput {
+  driveInput(steerAuthority: number): DriveInput {
     return {
       throttle: this.throttle,
       brake: this.brake,
       steer: this.steer,
       handbrake: this.handbrake,
-      shiftUp: this.shiftUp,
-      shiftDown: this.shiftDown,
-      manual,
+      neutral: false,
       steerAuthority,
     };
   }
