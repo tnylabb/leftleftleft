@@ -315,8 +315,9 @@ No key is shared between the two players:
 - **Blinding:** look the driver in the eyes with the lamp on (within the cone, with clear line
   of sight past the cockpit, the bodywork, the tablet, loose objects and the navigator's own arms; up to 5 m, so
   it works from outside the car too) and the *driver's* view
-  flashes white and fades over about a second. Only the driver's screen is affected and the controls keep
-  working. It re-arms after the beam has been away for 0.5 s (and at most every 1.2 s). Online, the lamp's
+  flashes white and fades over about 1.5 s; while the beam stays on their face they stay partly dazzled.
+  Only the driver's screen is affected and the controls keep working. It re-arms after the beam has been away
+  for 0.3 s (at most every 0.7 s). The beam itself is wide with a soft edge. Online, the lamp's
   on/off state is synced and its direction comes from the navigator's synced head (or on-foot) look.
 
 ### Pointing

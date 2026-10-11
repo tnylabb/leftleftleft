@@ -1450,13 +1450,14 @@ export class Game {
    * Head lamp in the driver's eyes: beam direction, distance and line of sight
    * (cockpit geometry, the tablet, loose objects and the navigator's body block
    * it; glass doesn't). Only the local driver's view is affected, controls are
-   * untouched; re-arms once the beam has moved away.
+   * untouched; stays partly dazzled while the beam stays on them and re-arms
+   * quickly once it has moved away.
    */
   private updateGlare(dt: number, now: number) {
-    this.glare = Math.max(0, this.glare - dt / 1.0);
+    this.glare = Math.max(0, this.glare - dt / 1.4);
     if (!this.driverControls || !this.seats.driver || !this.headlamp.on) {
       this.glareAway += dt;
-      if (this.glareAway > 0.5) this.glareArmed = true;
+      if (this.glareAway > 0.3) this.glareArmed = true;
       return;
     }
     const origin = new THREE.Vector3();
@@ -1466,7 +1467,7 @@ export class Game {
     const to = eye.clone().sub(origin);
     const dist = to.length();
     to.multiplyScalar(1 / Math.max(dist, 1e-4));
-    const inBeam = dist < 5 && to.dot(dir) > Math.cos(0.26); // in the cabin or a few metres outside
+    const inBeam = dist < 5 && to.dot(dir) > Math.cos(0.42); // in the cabin or a few metres outside
     let clear = false;
     if (inBeam) {
       const ray = this.glareRay;
@@ -1480,15 +1481,17 @@ export class Game {
     }
     if (inBeam && clear) {
       this.glareAway = 0;
-      if (this.glareArmed && now - this.lastGlareAt > 1200) {
+      if (this.glareArmed && now - this.lastGlareAt > 700) {
         this.glareArmed = false;
         this.lastGlareAt = now;
-        this.glare = this.night ? 1 : 0.75;
+        this.glare = this.night ? 1 : 0.9;
         this.carAudio.clack(0.15, -0.6);
       }
+      // still dazzled while the beam stays in their eyes
+      this.glare = Math.max(this.glare, this.night ? 0.55 : 0.4);
     } else {
       this.glareAway += dt;
-      if (this.glareAway > 0.5) this.glareArmed = true;
+      if (this.glareAway > 0.3) this.glareArmed = true;
     }
   }
 
