@@ -8,7 +8,8 @@ import { GeoBuilder, mat, setLayer } from '../rendering/geometry';
 import { LAYER } from '../rendering/layers';
 import { vertexColored } from '../rendering/materials';
 
-const CONE = 0.36; // spotlight half angle (rad)
+const CONE = 0.52; // spotlight half angle (rad): a wide, soft-edged beam
+const PENUMBRA = 0.9; // fraction of the cone that fades out towards the edge
 const RANGE = 14;
 /** Lamp position relative to the wearer's eye (eye frame: -Z forward, +Y up). */
 const LAMP_OFFSET = new THREE.Vector3(0, 0.085, -0.11);
@@ -41,9 +42,10 @@ export class Headlamp {
     this.group.add(this.lamp);
 
     // real spotlight just in front of the face, aimed along the view (-Z)
-    this.light = new THREE.SpotLight(0xfff1d6, 0, RANGE, CONE, 0.45, 1.3);
+    this.light = new THREE.SpotLight(0xfff1d6, 0, RANGE, CONE, PENUMBRA, 1.3);
     this.light.position.copy(LAMP_OFFSET);
-    this.light.target.position.copy(LAMP_OFFSET).add(new THREE.Vector3(0, -0.02, -1));
+    // tipped down ~8 degrees so the beam meets the line of sight at reading distance
+    this.light.target.position.copy(LAMP_OFFSET).add(new THREE.Vector3(0, -0.14, -1));
     this.light.layers.enableAll();
     if (night) {
       // shadows only at night (fixed per stage so shaders never recompile mid-run)
@@ -60,7 +62,9 @@ export class Headlamp {
     const coneLen = 2.6;
     const coneGeo = new THREE.ConeGeometry(Math.tan(CONE) * coneLen, coneLen, 12, 1, true);
     coneGeo.rotateX(Math.PI / 2);
-    coneGeo.translate(LAMP_OFFSET.x, LAMP_OFFSET.y, LAMP_OFFSET.z - coneLen / 2);
+    coneGeo.translate(0, 0, -coneLen / 2);
+    coneGeo.rotateX(-Math.atan(0.14)); // same downward tip as the light
+    coneGeo.translate(LAMP_OFFSET.x, LAMP_OFFSET.y, LAMP_OFFSET.z);
     this.coneMat = new THREE.MeshBasicMaterial({
       color: 0xfff1c8,
       transparent: true,
@@ -82,7 +86,7 @@ export class Headlamp {
     this.on = on;
     this.light.intensity = on ? (this.night ? 7 : 4) : 0;
     this.lens.emissive.setHex(on ? 0xfff3d0 : 0x000000);
-    this.coneMat.opacity = on ? (this.night ? 0.07 : 0.02) : 0;
+    this.coneMat.opacity = on ? (this.night ? 0.055 : 0.018) : 0;
     this.cone.visible = on;
   }
 
@@ -117,7 +121,9 @@ export class Headlamp {
     const cosA = to.dot(d);
     const cosOuter = Math.cos(CONE);
     if (cosA < cosOuter) return 0;
-    const cone = Math.min(1, (cosA - cosOuter) / (1 - cosOuter) / 0.55);
+    // soft edge: brightest in the middle, fading smoothly across the outer part of the cone
+    const t = Math.min(1, (cosA - cosOuter) / (1 - cosOuter) / PENUMBRA);
+    const cone = t * t * (3 - 2 * t);
     const falloff = 1 / (1 + dist * dist * 0.6);
     const facing = normal ? Math.max(0, -to.dot(normal)) : 1;
     return cone * falloff * facing;
