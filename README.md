@@ -440,6 +440,10 @@ follows the contours - gets narrower ledges and sheerer drops instead.
 | 1 v 1 v 1 v 1 | 4 | 4 | driver + AI navigator |
 | 2 v 2 | 4 | 2 | driver + human navigator |
 
+- The lobby only offers the modes made for the number of players in the room (1-2: co-op, 1v1 · 3: 1v1v1 ·
+  4: 1v1v1v1, 2v2) and switches by itself when someone joins or leaves, staying close to the host's last pick
+  (co-op grows into 2v2, 1v1 into 1v1v1 and 1v1v1v1). Players can switch roles any time without leaving;
+  two of the same role is allowed, the race just waits until each car has a driver and a navigator.
 - The host picks the mode in the lobby; the lobby shows the players needed / connected, one card per car,
   free seats, and who is waiting without a seat. In 2v2 players pick their crew (JOIN) and their role; in
   the one-driver modes everybody drives. The race only starts with the exact number of players, all seated,

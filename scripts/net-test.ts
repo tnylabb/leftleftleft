@@ -49,12 +49,17 @@ const joined = await ack<JoinAck>((cb) => nav.emit('room:join', { code: created.
 check(joined.ok, 'navigator joined');
 const third = await connect();
 const full = await ack<JoinAck>((cb) => third.emit('room:join', { code: created.code!, name: 'Third' }, cb));
-// rooms hold up to four (for the versus modes); in co-op a third player waits without a seat
-const thirdSeat = full.room?.players.find((p) => p.id === full.playerId);
-check(full.ok && thirdSeat?.team === null && thirdSeat?.role === null, 'a third player in a co-op room waits without a seat');
+// rooms hold up to four (for the versus modes): a third player turns co-op into a
+// three-player mode, and leaving brings the room back to co-op
+check(full.ok && full.room?.mode === '1v1v1', `a third player switches the room to a three-player mode (${full.room?.mode})`);
+let backTo: string | undefined;
+const track = (r: RoomSnapshot) => (backTo = r.mode);
+driver.on('room:state', track);
 third.emit('room:leave');
-await sleep(150);
+await sleep(250);
 third.disconnect();
+driver.off('room:state', track);
+check(backTo === 'coop', `when they leave the room is co-op again (${backTo})`);
 
 let room: RoomSnapshot = joined.room!;
 driver.on('room:state', (r) => (room = r));

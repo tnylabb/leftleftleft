@@ -3,7 +3,7 @@ import type { Socket } from 'socket.io';
 import { GameAuthority, type AuthorityOutput } from '../../src/shared/authority/GameAuthority';
 import { COUNTDOWN_MS, LOAD_TIMEOUT_MS, type StageLength } from '../../src/shared/constants';
 import type { Difficulty } from '../../src/shared/difficulty';
-import { MAX_ROOM_PLAYERS, MODE_SPEC, rankStandings, type RoomMode, type StandingEntry, type Standings } from '../../src/shared/modes';
+import { fitMode, MAX_ROOM_PLAYERS, MODE_SPEC, modesFor, rankStandings, type RoomMode, type StandingEntry, type Standings } from '../../src/shared/modes';
 import type { ClientToServerEvents, ImpactReport, MudReport, ServerToClientEvents } from '../../src/shared/protocol';
 import { toArrayBuffer } from '../../src/shared/snapshot';
 import { generateStage } from '../../src/shared/stage/StageGenerator';
@@ -65,6 +65,8 @@ export const FINISH_WINDOW_MS = Number(process.env.FINISH_WINDOW_MS ?? 60000);
 export class Room {
   readonly players: PlayerSlot[] = [];
   mode: RoomMode = 'coop';
+  /** The host's last pick: the room comes back to it (or the closest fit) as players come and go. */
+  private preferredMode: RoomMode = 'coop';
   phase: RoomPhase = 'lobby';
   stage: StageParams = { seed: randomSeed(), length: 'medium', night: false, map: 'countryside', difficulty: 'standard' };
   private stageData: StageData | null = null;
@@ -125,6 +127,7 @@ export class Room {
       profileCode,
     };
     this.players.push(slot);
+    this.fitModeToPlayers();
     this.normalizeSeats();
     return slot;
   }
@@ -195,6 +198,7 @@ export class Room {
     }
     if (!this.players.some((p) => p.isHost)) this.players[0].isHost = true;
     if (this.phase === 'lobby') {
+      this.fitModeToPlayers();
       this.normalizeSeats();
       this.broadcastState();
     } else if (!this.spec.versus || this.phase === 'loading') {
@@ -252,18 +256,34 @@ export class Room {
     }
   }
 
+  /** The host picks a mode - only one made for the number of players in the room. */
   setMode(slot: PlayerSlot, mode: RoomMode) {
     if (this.phase !== 'lobby' || !slot.isHost || mode === this.mode) return;
+    if (!modesFor(this.players.length).includes(mode)) return;
+    this.preferredMode = mode;
+    this.applyMode(mode);
+    this.normalizeSeats();
+    this.broadcastState();
+    this.notifyVoicePeers();
+  }
+
+  private applyMode(mode: RoomMode) {
+    if (mode === this.mode) return;
     const from = MODE_SPEC[this.mode];
     this.mode = mode;
     for (const p of this.players) {
       p.ready = false;
-      // coming from the one-car-each modes, crews are picked afresh
-      if (from.crew === 1) p.team = null;
+      // coming from the one-car-each modes (everybody a driver), crews and roles are dealt afresh
+      if (from.crew === 1) {
+        p.team = null;
+        p.role = null;
+      }
     }
-    this.normalizeSeats();
-    this.broadcastState();
-    this.notifyVoicePeers();
+  }
+
+  /** Players came or went: switch to a mode made for this many (lobby only). */
+  private fitModeToPlayers() {
+    if (this.phase === 'lobby') this.applyMode(fitMode(this.preferredMode, this.players.length));
   }
 
   setTeam(slot: PlayerSlot, team: number) {
@@ -557,6 +577,7 @@ export class Room {
       p.ready = false;
       p.loaded = false;
     }
+    this.fitModeToPlayers();
     this.normalizeSeats();
     if (reason) this.channel.emit('hint', { text: reason });
     this.broadcastState();
