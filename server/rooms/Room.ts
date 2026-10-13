@@ -242,11 +242,9 @@ export class Room {
       for (let t = 0; t < spec.teams; t++) if (count(t) < 2 && (best === null || count(t) < count(best))) best = t;
       p.team = best;
     }
-    // roles: unique within a crew, the free one is handed out
-    for (const p of this.players) {
-      if (p.team === null) p.role = null;
-      else if (p.role && this.players.some((o) => o !== p && o.team === p.team && o.role === p.role)) p.role = null;
-    }
+    // roles: players keep what they picked (two of the same is allowed in the lobby, the race
+    // just can't start until one of them switches); newcomers get the free one
+    for (const p of this.players) if (p.team === null) p.role = null;
     for (const p of this.players) {
       if (p.team === null || p.role) continue;
       const taken = this.players.filter((o) => o !== p && o.team === p.team).map((o) => o.role);
@@ -280,8 +278,9 @@ export class Room {
   }
 
   setRole(slot: PlayerSlot, role: Role | null) {
+    // switching is always allowed, even to a role a crew mate already has: canStart
+    // waits until every crew has one driver and one navigator
     if (this.phase !== 'lobby' || this.spec.crew === 1 || slot.team === null) return;
-    if (role && this.players.some((p) => p !== slot && p.team === slot.team && p.role === role)) return;
     slot.role = role;
     slot.ready = false;
     this.broadcastState();
