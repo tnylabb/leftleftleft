@@ -11,7 +11,8 @@ import type { RoomSnapshot, StageData, StageParams } from '../../src/shared/type
 
 export type S = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** Waits; remote servers get extra time per step: NET_TEST_LATENCY_MS=600. */
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms + Number(process.env.NET_TEST_LATENCY_MS ?? 0)));
 
 export function connect(url: string): Promise<S> {
   return new Promise((resolve, reject) => {
