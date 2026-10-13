@@ -40,6 +40,12 @@ export async function openDb(): Promise<Db> {
       close: () => pool.end(),
     };
   }
+  // Render (free plan) has no persistent disk and only 512 MB: an embedded database there would
+  // be wiped on every deploy and its first start alone needs ~350 MB. Stats stay off until
+  // DATABASE_URL is set (or STATS_DB_DIR points at a persistent disk).
+  if (process.env.RENDER && !process.env.STATS_DB_DIR) {
+    throw new Error('DATABASE_URL is not set - player statistics are off (set it to a Postgres connection string)');
+  }
   const { PGlite } = await import('@electric-sql/pglite');
   const dir = process.env.STATS_DB_DIR || path.resolve(process.cwd(), '.data', 'stats');
   mkdirSync(dir, { recursive: true });
