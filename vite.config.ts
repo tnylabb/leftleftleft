@@ -19,6 +19,7 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
         '/health': `http://localhost:${serverPort}`,
+        '/api': `http://localhost:${serverPort}`,
       },
     },
     build: {

@@ -2,6 +2,7 @@
 // and the AI co-driver used in solo practice.
 
 import type { Settings } from '../core/Settings';
+import { difficultyOf } from '../shared/difficulty';
 import { ROAD_SAMPLE_SPACING } from '../shared/constants';
 import { computeInstruction, spokenNote } from '../shared/stage/pacenotes';
 import type { CalloutId, CalloutMsg, StageData } from '../shared/types';
@@ -92,7 +93,20 @@ export class AICoDriver {
   private finishCalled = false;
   private wasBlind = false;
 
-  constructor(private stage: StageData) {}
+  /** Call distance multiplier from the difficulty. */
+  private leadK: number;
+  /** This call's timing: a little early or late, now and then much too late. */
+  private timing = 1;
+
+  constructor(private stage: StageData) {
+    this.leadK = difficultyOf(stage.params).noteLead;
+    this.rollTiming();
+  }
+
+  /** Human-ish timing: useful, not perfect (a human navigator can do better). */
+  private rollTiming() {
+    this.timing = Math.random() < 0.1 ? 0.6 : 0.82 + Math.random() * 0.33;
+  }
 
   reset() {
     this.called.clear();
@@ -116,7 +130,7 @@ export class AICoDriver {
       for (const c of st.corners) if (c.entryIdx < idx + 8) this.called.add(c.id);
       return { text: 'GOT IT, GOT IT!', urgent: false };
     }
-    const lead = Math.max(55, speed * 3.1 + 25);
+    const lead = Math.max(45, speed * 3.1 + 25) * this.leadK * this.timing;
     for (const j of st.jumps) {
       const d = (j.idx - idx) * ROAD_SAMPLE_SPACING;
       if (d > 0 && d < Math.max(40, speed * 2.4 + 15) && !this.calledJumps.has(j.idx)) {
@@ -130,6 +144,7 @@ export class AICoDriver {
       if (d < lead) {
         const ins = computeInstruction(st, idx, speed);
         this.called.add(next.id);
+        this.rollTiming();
         if (next.into) {
           const after = st.corners.find((c) => c.id > next.id && c.severity !== 'keep');
           if (after) this.called.add(after.id);

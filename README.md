@@ -86,6 +86,12 @@ The build uses relative asset paths, so it works both at a domain root and in a 
    included `netlify.toml` does that).
 4. Open the Netlify site: the menu should say **Game server online**.
 
+**Player statistics need a persistent database.** Render's free web services have no persistent disk, so
+the built-in embedded database would be wiped on every deploy or restart there. Create a free Postgres
+database (e.g. [Neon](https://neon.tech) or [Supabase](https://supabase.com)), copy its connection string
+and set it as `DATABASE_URL` in the Render service's environment (use `DATABASE_SSL=no-verify` if the
+provider's certificate isn't trusted by Node). The server creates its tables on start.
+
 Free server tiers (e.g. Render free) sleep when idle; the first visit can take ~30-60 s while the server
 wakes up. Reload the menu once it's up.
 
@@ -101,6 +107,10 @@ Copy `.env.example` to `.env` to override defaults:
 | `RECONNECT_GRACE_SECONDS` | `60` | How long a disconnected player's seat is kept |
 | `VITE_SERVER_URL` | (empty) | Client connects to this server instead of its own origin |
 | `VITE_STUN_URLS` | Google STUN | Comma-separated STUN/TURN URLs for built-in voice chat |
+| `DATABASE_URL` | (empty) | Postgres connection string for player statistics (hosted Postgres in production) |
+| `DATABASE_SSL` | (empty) | `no-verify` to accept the database's TLS certificate without verification |
+| `STATS_DB_DIR` | `./.data/stats` | Folder of the embedded Postgres used when `DATABASE_URL` is empty |
+| `FINISH_WINDOW_MS` | `60000` | Versus: how long the other cars have after the winner before they are DNF |
 
 > The server uses `GAME_PORT` (not `PORT`) on purpose: many tools set `PORT` for the web dev server, and
 > the two would collide.
@@ -216,6 +226,13 @@ No key is shared between the two players:
   anti-roll bars, slip-angle tyre model with a friction circle, rear-biased **all-wheel drive**, weight
   transfer, lift-off/braking oversteer, **handbrake turns** (the handbrake decouples the rear axle), rolling
   resistance and aero drag.
+- **Predictable handling** (all difficulties): grippy gravel that gives way progressively instead of
+  snapping, rear tyres gripping a touch more than the fronts (a slight understeer bias instead of spins),
+  steering that calms down with speed, and turn-in help / stability control that only ever aim for the yaw
+  rate the tyres can actually deliver (asking for more is what spun the car before). Grass is looser, mud
+  is properly slippery, and **handbrake turns** still rotate the car (stability control steps aside while
+  the handbrake is pulled). Measured by `scripts/handling-test.ts`: a 70 km/h lane change now peaks at
+  ~5-11° of slide instead of a spin; a handbrake turn at 50 km/h still swings the car round ~100-125°.
 - Fast and twitchy: about 0-100 km/h in 5.2 s and ~158 km/h flat out (headless measurement), on a narrow
   gravel road (5.1 m wide) with tight corners, hairpins, blind crests and trees close to the edge.
 - Surfaces: loose gravel road, grass (less grip, more drag), **mud puddles** (very slippery).
@@ -394,8 +411,73 @@ No key is shared between the two players:
   synthesised fanfare + crowd cheer. The results screen follows after 4.2 s. The physics timestep is never
   changed.
 
+### Difficulty code (shared by every map and every player in a room)
+The host picks it in the lobby (or you in the menu for local games); it is part of the stage settings, so
+everyone in a room drives exactly the same stage under the same rules.
+
+| | `RALLY_STANDARD` | `RALLY_HARD` | `RALLY_EXPERT` |
+| --- | --- | --- | --- |
+| Road width (countryside / mountain) | 5.1 m / as generated | -12% / -6% | -22% / -12% |
+| Corner mix (countryside) | classic | more hard corners, hairpins, chicanes | most |
+| Blind crests before tight corners | normal | x1.5 | x2 |
+| Mountain drops | as generated | steeper | steepest |
+| Driver sight distance (fog) | full | 72% | 50% |
+| Tablet route preview / next-call banner | 760 m / 420 m | 520 m / 260 m | 340 m / 160 m |
+| AI navigator call distance | full | 85% | 70% |
+| Puddles / livestock | normal | x1.4 / x1.3 | x1.8 / x1.6 |
+| Handling help | grip, ABS, stability control, some corner braking, edge nudge | a little grip, ABS, light stability | none (the raw car) |
+
+`RALLY_STANDARD` reproduces the classic stages exactly (same seed = same road and checksum). Each map
+applies the code to its own terrain: the countryside gets a harder corner mix, the mountain - whose road
+follows the contours - gets narrower ledges and sheerer drops instead.
+
+### Game modes
+| Mode | Players | Cars | Crew per car |
+| --- | --- | --- | --- |
+| CO-OP | 2 | 1 | driver + navigator (the original game) |
+| 1 v 1 | 2 | 2 | driver + **AI navigator** |
+| 1 v 1 v 1 | 3 | 3 | driver + AI navigator |
+| 1 v 1 v 1 v 1 | 4 | 4 | driver + AI navigator |
+| 2 v 2 | 4 | 2 | driver + human navigator |
+
+- The host picks the mode in the lobby; the lobby shows the players needed / connected, one card per car,
+  free seats, and who is waiting without a seat. In 2v2 players pick their crew (JOIN) and their role; in
+  the one-driver modes everybody drives. The race only starts with the exact number of players, all seated,
+  every crew complete and everybody ready.
+- Every car has its own physics (on its driver's computer) and its own server referee (checkpoints, missed
+  turns, crashes, penalties, the stage clock); all cars share the same stage, start and finish. The other
+  crews' cars are streamed to everyone (~15 Hz) and drawn with their livery, crew and a name tag in the crew
+  colour, and as coloured dots on the tablet. Rally "ghost" rules: cars don't collide, and a car is hidden
+  while it is on top of you (everybody starts on the same line).
+- Live positions on the HUD (P2/4 and the field) and on the results screen. When the first car finishes,
+  the others have 60 s to get home, then they are classified DNF. Positions go by final time including
+  penalties. A player who quits mid-race is DNF and the race goes on for everybody else.
+- **AI navigator** (one-driver modes, and solo practice): it holds the physical tablet in the passenger
+  seat and reads the actual route - corner severity and direction, "into" chains, braking, jumps,
+  hairpins, animals on the road, the finish - at a distance based on your speed and the difficulty. Its
+  timing is deliberately human: usually a little early or late, now and then much too late, so a good
+  human navigator is still faster. Missed turns and wrong way are called by the server referee.
+- Voice chat is between crew mates (co-op, 2v2).
+
+### Player statistics
+- Every **online** race that reaches a valid end is recorded by the server, from its own referees, for
+  every human in it: races, finished, wins / losses (versus modes; co-op counts as a race only), crashes,
+  missed turns, best and average stage time, distance, recoveries (resets), role, team position and crew,
+  per map / difficulty / length. Each (race, player) pair is stored once (a database constraint), so a
+  finish that fires twice can't count twice. Clients cannot submit results: there is no endpoint for it.
+- **YOUR STATS** (main menu): totals, win rate, best / average times, driver vs navigator, performance by
+  map and difficulty, recent results.
+- **Profiles go by name**: whitespace is normalised and capitals don't matter (`Balint`, `balint` and
+  `BALINT` are one profile); a returning player's stats are never overwritten. That is a convenience, not
+  authentication - anyone can type your name - so a name can be **protected with a recovery code**
+  (`LLL-XXXX-XXXX`, shown once, stored only as a salted scrypt hash on the server and in this browser).
+  A protected profile only collects races from players who present the code; entering the code on another
+  device unlocks it there. The public profile endpoint never returns the code or its hash.
+- Storage: **Postgres**. With `DATABASE_URL` set the server uses that database; without it, an embedded
+  Postgres (PGlite) in `./.data/stats` (or `STATS_DB_DIR`). Nothing lives only in memory.
+
 ### Multiplayer
-- Node.js + Socket.IO rooms with 4-letter codes, lobby with role selection, ready states, host stage
+- Node.js + Socket.IO rooms with 4-letter codes (up to 4 players), lobby with role selection, ready states, host stage
   settings, loading sync with stage checksum, countdown, start/finish/restart (both vote: retry / new road)
   and back-to-lobby.
 - **Server-authoritative game rules** (`src/shared/authority/GameAuthority.ts`, also used by the offline
@@ -426,7 +508,13 @@ at idle, a soft rev limiter and a few quiet pops after lifting off at high revs)
 pings, tyre scrub/squeal, wind (louder with open doors), wipers motor + squeak, horn, impacts scaled by
 strength and panned to the hit side, suspension thumps, tablet/object clacks, door rattles/bangs/slams,
 splashes, bush rustle, UI clicks, countdown beeps, checkpoint chime, finish fanfare + crowd cheer. Independent volumes: master, engine,
-environment, collisions, voice, interface.
+environment, collisions, voice, interface, music.
+
+**Music** (also synthesised, a look-ahead step sequencer on the WebAudio clock, crossfading between tracks):
+a laid-back 96 bpm groove in the menu, garage, lobby and results (electric-piano chords, round bass, soft
+swung drums, now and then a little melody), and a dramatic 138 bpm E-minor track on the stage (pulsing bass,
+dark pads, driving drums) that builds with your speed - 16th hats, an arpeggio, brighter pads, a pushing
+kick. Kept well under the car: at the default volume the stage music sits ~15-18 dB below the engine.
 
 ### UI
 Main menu and lobby float over a live 3D service park (the rally car under a start banner, in the chosen
@@ -451,15 +539,18 @@ server/                 Node.js game server
   rooms/                Room (lobby, phases, reconnection), RoomManager
   networking/           Socket event handlers (rate limits, payload checks)
   validation/           Input sanitisation, rate limiter
+  stats/                StatsStore: player profiles + race results in Postgres (or embedded PGlite)
 src/
   shared/               Code shared by server and client (pure TypeScript)
     stage/              Stage generator, terrain base, pace-note analysis, animal placement
     style.ts            Helmets, suits, skins, faces, liveries (shared with the server for validation)
+    difficulty.ts       RALLY_STANDARD / HARD / EXPERT
+    modes.ts            Game modes (co-op, 1v1, 1v1v1, 1v1v1v1, 2v2), standings
     race/               Road locator, race tracker
     authority/          GameAuthority: server-authoritative rules
     protocol.ts         Typed Socket.IO events
     snapshot.ts         Binary snapshot layouts
-  core/                 App flow, input, key bindings (single source of truth), settings, event bus
+  core/                 App flow, input, key bindings (single source of truth), settings, event bus, profiles (stats API)
   rendering/            Renderer (split screen), sky/lighting, materials, particles, geometry helpers,
                         crew (heads with googly eyes, helmets, race suits)
   physics/              Rapier world wrapper, car-local cabin physics
@@ -472,9 +563,9 @@ src/
   tablet/               Tablet model, loose object definitions
   interactions/         Driver and navigator controls
   multiplayer/          Session interface, local/online sessions, snapshot interpolation, voice chat
-  audio/                Audio engine and car sounds
+  audio/                Audio engine, car sounds, music
   game/                 Game orchestration, seat camera rigs, car render state, on-foot players,
-                        finish cinematic
+                        finish cinematic, opponents (the other crews' cars)
   ui/                   DOM UI and styles, controls overlay rows, LobbyScene (3D menu/lobby backdrop)
 scripts/                Headless test harnesses (see below)
 public/assets/          Favicon
@@ -492,8 +583,18 @@ npx tsx scripts/recovery-test.ts        # headless: car in a ditch, one vs two p
 npx tsx scripts/fall-test.ts 42         # headless: off the edge of the mountain: falls, tumbles, lands, no shortcut
 npx tsx scripts/animal-test.ts 42       # headless: sheep graze + scatter, cow hit / knocked over / gets up, honk, tractor, sync
 npx tsx scripts/steer-test.ts           # headless: steering response (yaw rate) at 30 / 60 / 100 / 140 km/h
+npx tsx scripts/assist-test.ts          # headless (~5 min): a clumsy bot with each difficulty's handling help - the help must help
+npx tsx scripts/handling-test.ts        # headless: lane change, long corner, mud, handbrake turn per difficulty
+npx tsx scripts/sim-test.ts 42 mountain expert   # the autopilot on any map / difficulty
+npx tsx scripts/stats-test.ts           # starts a server, plays real races, kills / restarts it: stats persistence
+npx tsx scripts/modes-test.ts http://localhost:3101   # needs a server (FINISH_WINDOW_MS=6000): all game modes
 npm run test:net                     # end-to-end multiplayer protocol test (needs a running server)
 ```
+
+`modes-test` drives real races (scripted cars on the actual stage) through the game modes: lobby seating and
+mode rules, a full room, 1v1 with the AI navigator's tablet, live standings, crew isolation (a crew's
+messages never reach the other crew; the other car arrives as an opponent stream), a 2v2 race, a
+four-car race with a DNF after the finish window, and a player quitting mid-race.
 
 `net-test` connects two Socket.IO clients and checks room creation/joining, sanitisation, full rooms, role
 and host rules, personal looks (shared, invalid ones ignored), load/countdown sync, car-state relay, animal
@@ -519,7 +620,14 @@ protection.
 - Text-to-speech voices depend on the browser/OS; it can be disabled in settings.
 - Remote hay bales and loose objects are interpolated from snapshots (cosmetically smooth, not physically
   re-simulated on the receiving side).
-- Rooms live in server memory: restarting the server ends running sessions.
+- Rooms live in server memory: restarting the server ends running sessions (statistics are in the database).
+- **Versus:** cars don't collide (ghost rules), and each crew has its own livestock and hay bales (they are
+  simulated by that crew's driver). Offline modes (solo, split screen) are not recorded in the statistics:
+  only the server's referees are trusted.
+- **Profiles by name** are a convenience, not accounts: an unprotected name can be used by anyone, and a
+  lost recovery code can't be recovered (there is no email).
+- The headless autopilot used by `sim-test` is crude on the mountain: on HARD / EXPERT it sometimes needs
+  resets or runs out of time on the narrow ledges (the stages are meant for a navigator).
 - Steering wheel rotation is visually clamped (no hand-over-hand animation).
 - Desktop only (keyboard + mouse or gamepad); touch input is not supported. On-foot movement and the
   navigator's interactions are keyboard + mouse only (the gamepad drives the car).

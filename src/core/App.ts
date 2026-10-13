@@ -2,6 +2,7 @@
 // stage -> results -> restart / lobby / menu. Owns the render loop.
 
 import { AudioEngine } from '../audio/AudioEngine';
+import { Music } from '../audio/Music';
 import { Game, type GameMode } from '../game/Game';
 import { LocalSession } from '../multiplayer/LocalSession';
 import { OnlineSession } from '../multiplayer/OnlineSession';
@@ -10,6 +11,11 @@ import { VoiceChat } from '../multiplayer/VoiceChat';
 import type { Renderer } from '../rendering/Renderer';
 import type { StageLength } from '../shared/constants';
 import { randomStyle, ROLE_STYLE, sameStyle, STYLE_LIMITS, type PlayerStyle } from '../shared/style';
+import { isDifficulty, type Difficulty } from '../shared/difficulty';
+import { isRoomMode, MODE_SPEC, TEAM_COLORS, type Standings } from '../shared/modes';
+import type { OpponentInfo } from '../game/Opponents';
+import type { ProfileView } from '../ui/UI';
+import { fetchProfile, protectName, savedCode, unlockName } from './Profiles';
 import type { Role, RoomSnapshot, StageMap, StageParams } from '../shared/types';
 import { LobbyScene } from '../ui/LobbyScene';
 import { UI } from '../ui/UI';
@@ -41,6 +47,7 @@ export class App {
   private menuLength: StageLength = 'medium';
   private menuNight = false;
   private menuMap: StageMap = 'countryside';
+  private menuDifficulty: Difficulty = 'standard';
   private serverStatus: ConnectionStatus | 'checking' = 'checking';
   private loadToken = 0;
   private lastT = 0;
@@ -53,6 +60,10 @@ export class App {
   private lobbyScene: LobbyScene;
   /** Where the look picker returns to. */
   private garageFrom: 'menu' | 'lobby' = 'menu';
+  private music: Music;
+  private profile: ProfileView | null = null;
+  /** Versus: latest positions (results screen, HUD). */
+  private standings: Standings | null = null;
 
   constructor(
     private renderer: Renderer,
@@ -63,6 +74,7 @@ export class App {
     this.ui = new UI(uiRoot, this.audio, this.settings);
     this.ui.onAction = (a, d, el) => this.onAction(a, d, el);
     this.lobbyScene = new LobbyScene(renderer);
+    this.music = new Music(this.audio);
     // your name tag follows the name field
     this.settings.onChange(() => {
       if (this.ui.isShown('menu')) this.showMenuScene();
@@ -122,6 +134,7 @@ export class App {
 
   private loop = (t: number) => {
     window.clearTimeout(this.fallbackTimer);
+    this.updateMusic();
     const dt = this.lastT ? Math.max(0, (t - this.lastT) / 1000) : 0.016;
     this.lastT = t;
     try {
@@ -151,6 +164,15 @@ export class App {
     this.input.endFrame();
     this.scheduleFrame();
   };
+
+  /** Lobby groove around the menus, the dramatic track on the stage (louder as you go faster). */
+  private updateMusic() {
+    const g = this.game;
+    if (!g) this.music.play('lobby');
+    else if (g.phase === 'countdown' || g.phase === 'racing') this.music.play('race');
+    else this.music.play(this.resultsShown ? 'lobby' : null);
+    this.music.setIntensity(g && g.phase === 'racing' ? g.cs.speed / 30 : 0);
+  }
 
   /**
    * Health check. A sleeping free-tier host (e.g. Render) takes up to a minute to
@@ -187,7 +209,7 @@ export class App {
   private showMenu() {
     this.ui.hideAll();
     this.ui.hideHud();
-    this.ui.renderMenu({ server: this.serverStatus, seat: this.serverStatus === 'online' ? this.savedSeatCode() : null, length: this.menuLength, night: this.menuNight, map: this.menuMap, error: this.menuError });
+    this.ui.renderMenu({ server: this.serverStatus, seat: this.serverStatus === 'online' ? this.savedSeatCode() : null, length: this.menuLength, night: this.menuNight, map: this.menuMap, difficulty: this.menuDifficulty, error: this.menuError });
     this.menuError = '';
     this.ui.show('menu');
     this.input.gameplay = false;
@@ -199,8 +221,38 @@ export class App {
   private showMenuScene() {
     const style = this.settings.style;
     this.lobbyScene.setLook(this.menuMap, this.menuNight);
-    this.lobbyScene.setLivery(style.livery);
-    this.lobbyScene.setSlots([{ name: this.settings.data.name, role: null, ready: false, me: true, connected: true, style, menu: true }]);
+    this.lobbyScene.setCrews([{ livery: style.livery, slots: [{ name: this.settings.data.name, role: null, ready: false, me: true, connected: true, style, menu: true }] }]);
+  }
+
+  // =============================================================== profile ==
+  private async openProfile(message: string | null = null, newCode: string | null = null) {
+    const name = this.ui.menuValues().name;
+    this.profile = { name, loading: true, error: null, profile: null, savedCode: savedCode(name), newCode, showCode: false, message };
+    this.ui.renderProfile(this.profile);
+    this.ui.show('profile');
+    const r = await fetchProfile(name);
+    if (!this.profile || this.profile.name !== name) return;
+    this.profile.loading = false;
+    if (r.ok) this.profile.profile = r.profile;
+    else this.profile.error = r.error;
+    this.ui.renderProfile(this.profile);
+  }
+
+  private async protectProfile(rotate: boolean) {
+    const v = this.profile;
+    if (!v) return;
+    const r = await protectName(v.name, rotate ? (v.savedCode ?? undefined) : undefined);
+    if ('code' in r) await this.openProfile(null, r.code);
+    else await this.openProfile(r.error);
+  }
+
+  private async unlockProfile() {
+    const v = this.profile;
+    if (!v) return;
+    const code = this.ui.profileCodeInput();
+    if (!code) return;
+    const ok = await unlockName(v.name, code);
+    await this.openProfile(ok ? null : 'That recovery code does not match this name');
   }
 
   // ================================================================ garage ==
@@ -232,11 +284,33 @@ export class App {
     else this.showMenu();
   }
 
+  /** Versus: the other crews' cars (looks, names, colours). */
+  private opponentInfos(): OpponentInfo[] {
+    const room = this.online?.room;
+    const mine = this.online?.myTeam ?? null;
+    if (this.mode !== 'online' || !room || !MODE_SPEC[room.mode].versus) return [];
+    const out: OpponentInfo[] = [];
+    for (let t = 0; t < MODE_SPEC[room.mode].teams; t++) {
+      if (t === mine) continue;
+      const crew = room.players.filter((p) => p.team === t).sort((a, b) => (a.role === 'driver' ? 0 : 1) - (b.role === 'driver' ? 0 : 1));
+      if (!crew.length) continue;
+      out.push({
+        team: t,
+        names: crew.map((p) => p.name),
+        driver: crew.find((p) => p.role === 'driver')?.style ?? ROLE_STYLE.driver,
+        navigator: crew.find((p) => p.role === 'navigator')?.style ?? ROLE_STYLE.navigator,
+        color: TEAM_COLORS[t],
+      });
+    }
+    return out;
+  }
+
   /** Who looks like what on the stage. Local games: your partner (or the AI) gets a contrasting look. */
   private crewStyles(): Record<Role, PlayerStyle> {
     const room = this.online?.room;
     if (this.mode === 'online' && room) {
-      const of = (r: Role) => room.players.find((pl) => pl.role === r)?.style ?? ROLE_STYLE[r];
+      const team = this.online?.myTeam ?? 0;
+      const of = (r: Role) => room.players.find((pl) => pl.team === team && pl.role === r)?.style ?? ROLE_STYLE[r];
       return { driver: of('driver'), navigator: of('navigator') };
     }
     const mine = this.settings.style;
@@ -261,6 +335,41 @@ export class App {
         break;
       case 'garage':
         this.openGarage();
+        break;
+      case 'difficulty':
+        if (isDifficulty(data.difficulty)) this.menuDifficulty = data.difficulty;
+        this.showMenu();
+        break;
+      case 'profile':
+        void this.openProfile();
+        break;
+      case 'close-profile':
+        this.ui.show('profile', false);
+        break;
+      case 'profile-protect':
+      case 'profile-rotate':
+        void this.protectProfile(action === 'profile-rotate');
+        break;
+      case 'profile-unlock':
+        void this.unlockProfile();
+        break;
+      case 'profile-show-code':
+        if (this.profile) {
+          this.profile.showCode = !this.profile.showCode;
+          this.ui.renderProfile(this.profile);
+        }
+        break;
+      case 'mode':
+        if (isRoomMode(data.mode)) this.online?.setMode(data.mode);
+        break;
+      case 'team':
+        this.online?.setTeam(Number(data.team));
+        break;
+      case 'stage-difficulty':
+        if (this.online?.room && isDifficulty(data.difficulty)) {
+          const st = this.online.room.stage;
+          this.online.setStage(st.length, st.seed, st.night, st.map, data.difficulty);
+        }
         break;
       case 'style': {
         const key = data.key as keyof PlayerStyle;
@@ -318,25 +427,25 @@ export class App {
       case 'stage':
         if (this.online?.room) {
           const st = this.online.room.stage;
-          this.online.setStage((data.length as StageLength) ?? 'medium', st.seed, st.night, st.map);
+          this.online.setStage((data.length as StageLength) ?? 'medium', st.seed, st.night, st.map, st.difficulty);
         }
         break;
       case 'stage-time':
         if (this.online?.room) {
           const st = this.online.room.stage;
-          this.online.setStage(st.length, st.seed, data.night === '1', st.map);
+          this.online.setStage(st.length, st.seed, data.night === '1', st.map, st.difficulty);
         }
         break;
       case 'stage-map':
         if (this.online?.room) {
           const st = this.online.room.stage;
-          this.online.setStage(st.length, st.seed, st.night, data.map === 'mountain' ? 'mountain' : 'countryside');
+          this.online.setStage(st.length, st.seed, st.night, data.map === 'mountain' ? 'mountain' : 'countryside', st.difficulty);
         }
         break;
       case 'reroll':
         if (this.online?.room) {
           const st = this.online.room.stage;
-          this.online.setStage(st.length, undefined, st.night, st.map);
+          this.online.setStage(st.length, undefined, st.night, st.map, st.difficulty);
         }
         break;
       case 'copy-code':
@@ -410,6 +519,10 @@ export class App {
         this.lobbyMsg = t;
         if (this.ui.isShown('lobby')) this.renderLobby();
       }),
+      s.on('standings', (st) => {
+        this.standings = st;
+        if (this.ui.isShown('results')) this.showResults();
+      }),
     );
   }
 
@@ -417,6 +530,7 @@ export class App {
     const { name } = this.ui.menuValues();
     try {
       const s = this.ensureOnline();
+      s.profileCode = savedCode(name);
       const res = await s.createRoom(name);
       if (!res.ok) throw new Error(res.error ?? 'Could not create a room');
       this.showLobby();
@@ -435,6 +549,7 @@ export class App {
     }
     try {
       const s = this.ensureOnline();
+      s.profileCode = savedCode(name);
       const res = await s.joinRoom(code, name);
       if (!res.ok) throw new Error(res.error ?? 'Could not join');
       this.showLobby();
@@ -474,19 +589,30 @@ export class App {
     if (!s?.room) return;
     const v = this.voice;
     this.ui.renderLobby(s.room, s.playerId, s.status, v ? { state: v.state, error: v.error, muted: v.muted } : null, this.lobbyMsg);
-    // the crew in 3D: both seats, a ghost where nobody has joined yet
+    // the crews in 3D: one car per crew, a ghost where a seat is still free,
+    // the AI navigator next to each solo driver
     const room = s.room;
     this.lobbyScene.setLook(room.stage.map, room.stage.night);
-    // the car wears the driver's livery (yours while you are picking one)
-    const me = room.players.find((pl) => pl.id === s.playerId);
-    const driver = room.players.find((pl) => pl.role === 'driver');
-    this.lobbyScene.setLivery(this.ui.isShown('garage') ? this.settings.style.livery : (driver ?? me)?.style.livery ?? this.settings.style.livery);
-    this.lobbyScene.setSlots([0, 1].map((i) => {
-      const pl = room.players[i];
+    const spec = MODE_SPEC[room.mode];
+    const myTeam = room.players.find((pl) => pl.id === s.playerId)?.team ?? null;
+    const slotOf = (pl: RoomSnapshot['players'][number]) => {
       // your own look straight from the settings (the room echoes it back a moment later)
-      const style = pl?.id === s.playerId ? this.settings.style : pl?.style;
-      return pl && style ? { name: pl.name, role: pl.role, ready: pl.ready, me: pl.id === s.playerId, connected: pl.connected, style } : null;
-    }));
+      const style = pl.id === s.playerId ? this.settings.style : pl.style;
+      return { name: pl.name, role: pl.role, ready: pl.ready, me: pl.id === s.playerId, connected: pl.connected, style };
+    };
+    const crews = Array.from({ length: spec.teams }, (_, t) => {
+      const members = room.players.filter((pl) => pl.team === t);
+      const driver = members.find((pl) => pl.role === 'driver');
+      const nav = members.find((pl) => pl.role === 'navigator');
+      const extra = members.filter((pl) => pl !== driver && pl !== nav);
+      const seats = [driver ?? extra.shift(), nav ?? extra.shift()];
+      // the car wears its driver's livery (yours while you are picking one)
+      const mine = t === myTeam && this.ui.isShown('garage');
+      const livery = mine ? this.settings.style.livery : (driver ?? seats[0] ?? seats[1])?.style.livery ?? 0;
+      const slots = [seats[0] ? slotOf(seats[0]) : null, seats[1] ? slotOf(seats[1]) : spec.crew === 1 ? { name: 'AI NAVIGATOR', role: 'navigator' as const, ready: true, me: false, connected: true, style: ROLE_STYLE.navigator, ai: true } : null];
+      return { livery, slots };
+    });
+    this.lobbyScene.setCrews(crews);
   }
 
   private onRoom(room: RoomSnapshot) {
@@ -506,7 +632,7 @@ export class App {
   private startLocal(mode: 'couch' | 'solo') {
     this.teardownSession();
     this.mode = mode;
-    const s = new LocalSession(mode === 'couch' ? ['driver', 'navigator'] : ['driver'], this.menuLength, this.menuNight, this.menuMap);
+    const s = new LocalSession(mode === 'couch' ? ['driver', 'navigator'] : ['driver'], this.menuLength, this.menuNight, this.menuMap, undefined, this.menuDifficulty);
     this.session = s;
     this.unsub.push(s.on('load', (p) => void this.startGame(p)));
     s.start();
@@ -524,7 +650,20 @@ export class App {
     this.ui.setLoading(0, 'Preparing…');
     this.ui.show('loading');
     await nextFrame();
-    const game = new Game({ renderer: this.renderer, input: this.input, settings: this.settings, audio: this.audio, ui: this.ui, session, mode: this.mode, crew: this.crewStyles() });
+    this.standings = null;
+    const game = new Game({
+      renderer: this.renderer,
+      input: this.input,
+      settings: this.settings,
+      audio: this.audio,
+      ui: this.ui,
+      session,
+      mode: this.mode,
+      crew: this.crewStyles(),
+      aiNavigator: this.mode === 'online' && !!this.online?.aiNavigator,
+      opponents: this.opponentInfos(),
+      myTeam: this.online?.myTeam ?? null,
+    });
     let hash: number;
     try {
       hash = await game.load(params, async (f, text) => {
@@ -575,8 +714,10 @@ export class App {
     this.ui.cinematic(null);
     const room = this.online?.room;
     const me = this.online?.playerId ?? '';
-    const partner = room?.players.find((p) => p.id !== me)?.id ?? '';
-    this.ui.renderResults(g.results, this.mode, { mine: room?.restartVotes[me] ?? null, partner: room?.restartVotes[partner] ?? null });
+    const others = room?.players.filter((p) => p.id !== me) ?? [];
+    const otherVotes = others.map((p) => room?.restartVotes[p.id]).filter((v): v is 'retry' | 'new' => !!v);
+    const partnerVote = others.length && otherVotes.length === others.length ? (otherVotes.includes('new') ? 'new' : 'retry') : null;
+    this.ui.renderResults(g.results, this.mode, { mine: room?.restartVotes[me] ?? null, partner: partnerVote }, this.standings ?? g.standings, this.online?.myTeam ?? null);
     this.ui.show('results');
     this.input.gameplay = false;
   }
@@ -585,6 +726,7 @@ export class App {
     if (!this.game || this.ui.isShown('results') || this.ui.isShown('loading')) {
       if (this.ui.isShown('settings')) this.ui.show('settings', false);
       else if (this.ui.isShown('help')) this.ui.show('help', false);
+      else if (this.ui.isShown('profile')) this.ui.show('profile', false);
       return;
     }
     if (this.ui.isShown('settings')) {

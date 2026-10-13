@@ -1,5 +1,6 @@
-// The 3D "service park" behind the main menu and the lobby: the rally car on a
-// gravel pad, with each player's character standing at their door - name tag,
+// The 3D "service park" behind the main menu and the lobby: one rally car per
+// crew on a gravel pad (up to four in the versus modes), with each player's
+// character standing at their door - name tag,
 // their own helmet / suit / face, idling, waving once ready - and a ghost where
 // a co-driver is still missing. The car wears the driver's livery. The camera
 // slowly sways around the scene, or moves in close while you change your look.
@@ -28,6 +29,21 @@ export interface LobbySlot {
   style: PlayerStyle;
   /** Main menu: just the name plate, no role / ready state. */
   menu?: boolean;
+  /** The AI navigator of a one-driver crew. */
+  ai?: boolean;
+}
+
+/** One car in the park: its livery and who stands at its doors ([driver side, navigator side]). */
+export interface CrewView {
+  livery: number;
+  slots: (LobbySlot | null)[];
+}
+
+interface Bay {
+  livery: number;
+  car: CarModel;
+  cockpit: Cockpit;
+  pos: THREE.Vector3;
 }
 
 /** The car's nose points (roughly) at the camera. */
@@ -46,6 +62,7 @@ interface SlotView {
   phase: number;
   data: LobbySlot | null;
   side: Role;
+  bay: number;
   /** 1 -> 0: a little show-off twirl after a new look. */
   spin: number;
 }
@@ -55,47 +72,72 @@ export class LobbyScene {
   readonly camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.1, 1200);
   private env = new THREE.Group();
   private sky: Sky | null = null;
-  private car: CarModel;
+  private bays: Bay[] = [];
   private lookKey = '';
   private night = false;
   private slots: SlotView[] = [];
   private t = 0;
   private lamps: THREE.PointLight[] = [];
   private carYaw = CAR_YAW;
-  private livery = 0;
-  private cockpit: Cockpit;
   /** 0 = wide shot of the park, 1 = close-up of you (changing your look). */
   private focus = 0;
   private focusTarget = 0;
 
   constructor(private renderer: Renderer) {
     this.camera.layers.enableAll();
-    this.car = new CarModel();
-    this.cockpit = new Cockpit();
-    this.placeCar();
     this.scene.add(this.env);
     this.setLook('countryside', false);
+    this.setCrews([{ livery: 0, slots: [] }]);
   }
 
-  private placeCar() {
-    this.car.root.add(this.cockpit.group);
-    this.car.root.position.set(0, 0.5, 0);
-    this.car.root.rotation.y = this.carYaw;
-    this.car.updateWheels([0.09, 0.09, 0.09, 0.09], [0, 0, 0, 0], 0.18);
-    this.car.setHeadlights(this.night);
-    this.car.root.traverse((o) => o.layers.enableAll());
-    this.scene.add(this.car.root);
+  /** Cars side by side, in a gentle V towards the camera. */
+  private bayPos(i: number, n: number): THREE.Vector3 {
+    const off = (i - (n - 1) / 2) * 5.6;
+    return new THREE.Vector3(off, 0, -Math.abs(off) * 0.18);
   }
 
-  /** Repaints the car (index into LIVERIES). */
-  setLivery(index: number) {
-    if (index === this.livery || !LIVERIES[index]) return;
-    this.livery = index;
-    this.car.dispose();
-    this.cockpit.dispose();
-    this.car = new CarModel(LIVERIES[index]);
-    this.cockpit = new Cockpit(LIVERIES[index]);
-    this.placeCar();
+  private makeBay(livery: number, pos: THREE.Vector3): Bay {
+    const look = LIVERIES[livery] ?? LIVERIES[0];
+    const car = new CarModel(look, { lights: false });
+    const cockpit = new Cockpit(look);
+    car.root.add(cockpit.group);
+    car.root.position.set(pos.x, 0.5, pos.z);
+    car.root.rotation.y = this.carYaw;
+    car.updateWheels([0.09, 0.09, 0.09, 0.09], [0, 0, 0, 0], 0.18);
+    car.setHeadlights(this.night);
+    car.root.traverse((o) => o.layers.enableAll());
+    this.scene.add(car.root);
+    return { livery, car, cockpit, pos };
+  }
+
+  /**
+   * The cars and who stands at them. Menu: one car, just you. Lobby: one car
+   * per crew (co-op one, 2v2 two, 1v1... one per driver).
+   */
+  setCrews(crews: CrewView[]) {
+    const n = Math.max(1, crews.length);
+    // rebuild the cars that changed (count, position or paint)
+    for (let i = 0; i < Math.max(n, this.bays.length); i++) {
+      const want = crews[i];
+      const have = this.bays[i];
+      const pos = this.bayPos(i, n);
+      if (have && (!want || have.livery !== want.livery || !have.pos.equals(pos))) {
+        have.car.dispose();
+        have.cockpit.dispose();
+      }
+      if (!want) continue;
+      if (!have || have.livery !== want.livery || !have.pos.equals(pos)) this.bays[i] = this.makeBay(want.livery, pos);
+    }
+    this.bays.length = n;
+    const slots: { data: LobbySlot | null; bay: number; side: Role }[] = [];
+    crews.forEach((c, b) => {
+      const taken = new Set(c.slots.filter((x): x is LobbySlot => !!x?.role).map((x) => x.role!));
+      c.slots.forEach((d, k) => {
+        const pref: Role = k === 0 ? 'driver' : 'navigator';
+        slots.push({ data: d, bay: b, side: d?.role ?? (taken.has(pref) ? (pref === 'driver' ? 'navigator' : 'driver') : pref) });
+      });
+    });
+    this.setSlots(slots);
   }
 
   /** Close-up of your own character (while you pick a look) or the wide shot. */
@@ -116,7 +158,7 @@ export class LobbyScene {
     this.lamps = [];
     this.sky = new Sky(this.scene, this.renderer.shadowMapSize, night, mountain);
     this.sky.update(new THREE.Vector3(0, 0, 0));
-    this.car.setHeadlights(night);
+    for (const b of this.bays) b.car.setHeadlights(night);
     this.buildGround(mountain);
     this.buildProps(mountain);
     // floodlights over the service park (warm pools of light at night)
@@ -203,7 +245,7 @@ export class LobbyScene {
     const rng = new Rng(mountain ? 5 : 3);
     // hay bales and a tyre stack round the edge of the pad
     const bale = new GeoBuilder().add(new THREE.CylinderGeometry(0.62, 0.62, 1.3, 9), 0xd8b04f, mat(0, 0.62, 0, 0, 0, Math.PI / 2), { shade: 0.12 }).build();
-    for (const [x, z, yaw] of [[-5.6, 2.6, 0.3], [-4.4, 3.6, 1.1], [7.4, 5.2, -0.4], [-6.6, -1.2, 1.5]]) {
+    for (const [x, z, yaw] of [[-12.6, 3.2, 0.3], [-11.4, 4.6, 1.1], [12.4, 5.2, -0.4], [-13.6, -0.8, 1.5]]) {
       const m = new THREE.Mesh(bale, vertexColored());
       m.position.set(x, 0, z);
       m.rotation.y = yaw;
@@ -214,7 +256,7 @@ export class LobbyScene {
     const tyres = new GeoBuilder();
     for (let i = 0; i < 4; i++) tyres.add(new THREE.TorusGeometry(0.34, 0.14, 6, 10), 0x1d1d1c, mat(0, 0.14 + i * 0.27, 0, Math.PI / 2, 0, 0), { shade: 0.1 });
     const stack = new THREE.Mesh(tyres.build(), vertexColored());
-    stack.position.set(4.6, 0, -2.4);
+    stack.position.set(12.2, 0, -2.2);
     stack.castShadow = true;
     this.env.add(stack);
     // start banner behind the car
@@ -229,7 +271,7 @@ export class LobbyScene {
     banner.castShadow = true;
     const archGroup = new THREE.Group();
     archGroup.add(archMesh, banner);
-    archGroup.position.set(1.5, 0, -6.5);
+    archGroup.position.set(1.5, 0, -8.5);
     archGroup.rotation.y = 0.25;
     this.env.add(archGroup);
     // trees (and on the mountain, boulders) around the park
@@ -257,23 +299,23 @@ export class LobbyScene {
     }
   }
 
-  /** Players to show: slot 0 and 1 (null = empty seat -> ghost). In the main menu pass just yourself. */
-  setSlots(players: (LobbySlot | null)[]) {
+  /** Who stands where (null = empty seat -> ghost). */
+  private setSlots(entries: { data: LobbySlot | null; bay: number; side: Role }[]) {
+    const players = entries.map((e) => e.data);
     while (this.slots.length < players.length) {
       const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(document.createElement('canvas')), depthTest: false, transparent: true }));
       tag.renderOrder = 10;
       tag.layers.enableAll();
       this.scene.add(tag);
-      this.slots.push({ key: '', avatar: null, ghost: null, tag, tagKey: '', ring: null, phase: this.slots.length * 2.1, data: null, side: 'driver', spin: 0 });
+      this.slots.push({ key: '', avatar: null, ghost: null, tag, tagKey: '', ring: null, phase: this.slots.length * 2.1, data: null, side: 'driver', bay: 0, spin: 0 });
     }
     while (this.slots.length > players.length) this.disposeSlot(this.slots.pop()!);
-    const taken = new Set(players.filter((p): p is LobbySlot => !!p?.role).map((p) => p.role!));
     players.forEach((p, i) => {
       const sv = this.slots[i];
       sv.data = p;
-      // stand at your role's door; without a role, the free side (slot order)
-      const pref: Role = i === 0 ? 'driver' : 'navigator';
-      sv.side = p?.role ?? (taken.has(pref) ? (pref === 'driver' ? 'navigator' : 'driver') : pref);
+      // stand at your role's door (on your crew's car); without a role, the free side
+      sv.side = entries[i].side;
+      sv.bay = entries[i].bay;
       const key = p ? `p|${p.role ?? 'none'}|${encodeStyle(p.style)}` : 'ghost';
       if (key !== sv.key) {
         // same player, new look: show it off
@@ -304,7 +346,7 @@ export class LobbyScene {
         sv.ring.geometry.dispose();
         sv.ring = null;
       }
-      const tagKey = p ? `${p.name}|${p.role}|${p.ready}|${p.me}|${p.connected}|${p.menu}` : 'ghost';
+      const tagKey = p ? `${p.name}|${p.role}|${p.ready}|${p.me}|${p.connected}|${p.menu}|${p.ai}` : 'ghost';
       if (tagKey !== sv.tagKey) {
         sv.tagKey = tagKey;
         drawTag(sv.tag, p);
@@ -323,17 +365,23 @@ export class LobbyScene {
 
   private spotOf(sv: SlotView): THREE.Vector3 {
     const carQ = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), this.carYaw);
-    return SPOT[sv.side].clone().applyQuaternion(carQ).add(this.car.root.position.clone().setY(0));
+    const bay = this.bays[sv.bay] ?? this.bays[0];
+    return SPOT[sv.side].clone().applyQuaternion(carQ).add(bay.pos);
   }
 
   update(dt: number) {
     this.t += dt;
     const t = this.t;
     // camera: from the front-left of the car, slowly swaying round it ...
-    const ang = 0.35 + Math.sin(t * 0.07) * 0.32;
-    const wideCam = new THREE.Vector3(Math.sin(ang) * 9.6, 2.5 + Math.sin(t * 0.11) * 0.25, Math.cos(ang) * 9.6);
+    // (further back, and swaying less, when there are more cars to fit in)
+    const extra = this.bays.length - 1;
+    const ang = 0.35 / (1 + extra * 0.6) + Math.sin(t * 0.07) * (0.32 / (1 + extra * 0.5));
+    const radius = 9.6 + extra * 3.4;
+    // several cars: look a little to the right of them, so they sit left of the lobby panel
+    const pan = new THREE.Vector3(extra * 1.1, 0, 0);
+    const wideCam = new THREE.Vector3(Math.sin(ang) * radius, 2.5 + extra * 0.7 + Math.sin(t * 0.11) * 0.25, Math.cos(ang) * radius).add(pan);
     const camPos = wideCam.clone();
-    const target = CAM_TARGET.clone();
+    const target = CAM_TARGET.clone().multiplyScalar(extra ? 0.4 : 1).add(pan);
     // ... or close in on you, a little to the side so the car shows behind
     this.focus += (this.focusTarget - this.focus) * Math.min(1, dt * 3.2);
     const mine = this.slots.find((sv) => sv.data?.me);
@@ -439,8 +487,10 @@ export class LobbyScene {
     for (const sv of this.slots) this.disposeSlot(sv);
     this.slots = [];
     this.sky?.dispose();
-    this.car.dispose();
-    this.cockpit.dispose();
+    for (const b of this.bays) {
+      b.car.dispose();
+      b.cockpit.dispose();
+    }
     this.scene.clear();
   }
 }
@@ -494,10 +544,10 @@ function drawTag(sprite: THREE.Sprite, p: LobbySlot | null) {
     g.font = `22px ${font}`;
     g.fillStyle = '#d9d1bd';
     const role = p.role ? p.role.toUpperCase() : 'PICK A ROLE';
-    g.fillText(p.menu ? 'THAT IS YOU' : p.me ? `YOU · ${role}` : role, 48, 92);
+    g.fillText(p.menu ? 'THAT IS YOU' : p.ai ? 'TABLET + PACE NOTES' : p.me ? `YOU · ${role}` : role, 48, 92);
   }
   g.restore();
-  if (p && !p.menu) {
+  if (p && !p.menu && !p.ai) {
     // ready chip below the plate
     const label = !p.connected ? 'RECONNECTING…' : p.ready ? 'READY!' : 'NOT READY';
     g.font = `24px ${font}`;

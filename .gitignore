@@ -6,3 +6,6 @@ dist-server
 .DS_Store
 # local Claude app tooling
 .claude/
+
+# local stats database (embedded Postgres)
+.data/

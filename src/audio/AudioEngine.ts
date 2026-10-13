@@ -3,7 +3,7 @@
 
 import type { Settings } from '../core/Settings';
 
-export type Bus = 'engine' | 'environment' | 'collisions' | 'voice' | 'ui';
+export type Bus = 'engine' | 'environment' | 'collisions' | 'voice' | 'ui' | 'music';
 
 export class AudioEngine {
   ctx: AudioContext | null = null;
@@ -38,7 +38,7 @@ export class AudioEngine {
       comp.connect(ctx.destination);
       this.master = ctx.createGain();
       this.master.connect(comp);
-      for (const b of ['engine', 'environment', 'collisions', 'voice', 'ui'] as Bus[]) {
+      for (const b of ['engine', 'environment', 'collisions', 'voice', 'ui', 'music'] as Bus[]) {
         const g = ctx.createGain();
         g.connect(this.master);
         this.buses[b] = g;
@@ -63,6 +63,8 @@ export class AudioEngine {
     this.buses.collisions.gain.setTargetAtTime(s.collisionVolume, t, 0.05);
     this.buses.voice.gain.setTargetAtTime(s.voiceVolume, t, 0.05);
     this.buses.ui.gain.setTargetAtTime(s.uiVolume, t, 0.05);
+    // music sits well under the game: the slider's full range is still fairly quiet
+    this.buses.music.gain.setTargetAtTime(s.musicVolume * 2, t, 0.05);
   }
 
   setPaused(paused: boolean) {

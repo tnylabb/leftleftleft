@@ -37,6 +37,7 @@ import {
   GRIP_REACH,
   MAX_STEPS_PER_FRAME,
   ROAD_HALF_WIDTH,
+  ROAD_SAMPLE_SPACING,
 } from '../shared/constants';
 import { clamp } from '../shared/math';
 import { RoadLocator } from '../shared/race/RoadLocator';
@@ -49,6 +50,9 @@ import { TabletModel, buildLooseObjectMeshes } from '../tablet/TabletModel';
 import { controlRows, type ControlsState } from '../ui/controlsHelp';
 import type { HudData, UI } from '../ui/UI';
 import { CarModel } from '../vehicle/CarModel';
+import { applyAssistInput } from '../vehicle/assists';
+import { difficultyOf } from '../shared/difficulty';
+import type { RoadLocation } from '../shared/race/RoadLocator';
 import { LIVERIES, type PlayerStyle } from '../shared/style';
 import { VehicleController } from '../vehicle/VehicleController';
 import { Animals, type AnimalMarker, type AnimalSound, type CarNearby } from '../world/Animals';
@@ -62,6 +66,8 @@ import { FallCamera } from './FallCamera';
 import { CINEMATIC_SECONDS, FinishCinematic } from './FinishCinematic';
 import { EYE_HEIGHT, FootAvatar, FootController, hookWorld, type FootEnv, type FootIntent } from './OnFoot';
 import { SeatView } from './SeatView';
+import { Opponents, type OpponentInfo } from './Opponents';
+import type { Standings } from '../shared/modes';
 
 
 export type GameMode = 'online' | 'couch' | 'solo';
@@ -77,7 +83,16 @@ export interface GameDeps {
   mode: GameMode;
   /** What each crew member looks like; the car wears the driver's livery. */
   crew: Record<Role, PlayerStyle>;
+  /** Online versus with one person per car: this client runs the AI navigator in the passenger seat. */
+  aiNavigator?: boolean;
+  /** Versus: the other crews' cars. */
+  opponents?: OpponentInfo[];
+  /** Versus: our car / crew number. */
+  myTeam?: number | null;
 }
+
+/** m:ss.s */
+const fmtClock = (ms: number) => `${Math.floor(ms / 60000)}:${((ms % 60000) / 1000).toFixed(1).padStart(4, '0')}`;
 
 const _v = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
@@ -108,6 +123,14 @@ export class Game {
   private carNear: CarNearby = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), horn: false };
   private animalMarkers: AnimalMarker[] = [];
   private animalWarnAt = 0;
+  private assistLoc: RoadLocation = { idx: 0, lateral: 0, distance: 0, roadY: 0, heading: 0 };
+  /** No human navigator in this car: the AI holds the tablet and reads the notes. */
+  private aiNav: boolean;
+  private opponents: Opponents | null = null;
+  /** Versus: latest positions from the server. */
+  standings: Standings | null = null;
+  /** Results arrived without crossing the line (versus DNF): no finish cinematic. */
+  private dnfFinished = false;
   private car!: CarModel;
   private cockpit!: Cockpit;
   private windshield!: Windshield;
@@ -228,7 +251,8 @@ export class Game {
     this.roles = deps.mode === 'online' ? [...deps.session.localRoles] : deps.mode === 'couch' ? ['driver', 'navigator'] : ['driver'];
     this.bindMode = deps.mode === 'couch' ? 'couch' : 'single';
     this.simulateCar = this.roles.includes('driver');
-    this.simulateCabin = this.roles.includes('navigator') || deps.mode === 'solo';
+    this.aiNav = deps.mode === 'solo' || (!!deps.aiNavigator && !this.roles.includes('navigator'));
+    this.simulateCabin = this.roles.includes('navigator') || this.aiNav;
     this.carAudio = new CarAudio(deps.audio);
     this.voice = new Voice(deps.settings);
   }
@@ -239,7 +263,7 @@ export class Game {
 
   /** True once the finish cinematic has played (results may be shown). */
   get cinematicDone(): boolean {
-    return !!this.cinematic && this.cinematic.elapsed >= CINEMATIC_SECONDS;
+    return this.dnfFinished || (!!this.cinematic && this.cinematic.elapsed >= CINEMATIC_SECONDS);
   }
 
   /** Whether the local player currently looks around with a captured mouse. */
@@ -259,7 +283,7 @@ export class Game {
     this.night = this.stage.params.night;
     this.locator = new RoadLocator(this.stage);
     d.renderer.applyQuality(quality);
-    this.sky = new Sky(this.scene, d.renderer.shadowMapSize, this.night, this.stage.params.map === 'mountain');
+    this.sky = new Sky(this.scene, d.renderer.shadowMapSize, this.night, this.stage.params.map === 'mountain', difficultyOf(this.stage.params).sight);
     if (this.simulateCar) this.physics = new PhysicsWorld();
 
     await progress(0.08, 'Shaping hills and ditches…');
@@ -282,6 +306,10 @@ export class Game {
     this.buildCar();
     this.particles = new Particles();
     this.scene.add(this.particles.mesh);
+    if (d.opponents?.length) {
+      this.opponents = new Opponents(d.opponents, this.night);
+      this.scene.add(this.opponents.group);
+    }
     this.wireSession();
     await progress(0.95, 'Warming up shaders…');
     this.applyPose();
@@ -389,7 +417,7 @@ export class Game {
       this.cabinSample[CABIN.heldObject] = -1;
       this.cabinSample[CABIN.footGrip] = -1;
     }
-    if (d.mode === 'solo') this.ai = new AICoDriver(this.stage);
+    if (this.aiNav) this.ai = new AICoDriver(this.stage);
   }
 
   private listenerSide(): number {
@@ -434,8 +462,15 @@ export class Game {
       s.on('results', (r) => {
         this.results = r;
         this.phase = 'finished';
-        this.startFinish();
+        if (r.dnf) {
+          // out of time / crew left: straight to the results
+          this.dnfFinished = true;
+          this.d.ui.banner(null);
+          this.d.ui.toast(this.standings?.final === false ? 'OUT OF THE RACE' : "TIME'S UP - DID NOT FINISH", 'bad');
+        } else this.startFinish();
       }),
+      s.on('standings', (st) => (this.standings = st)),
+      s.on('opponentCar', (p) => this.opponents?.push(p.team, p.buf)),
       s.on('paused', (p) => {
         this.pausedRemote = p.paused;
         this.d.ui.banner(p.paused ? p.reason : null);
@@ -601,7 +636,7 @@ export class Game {
       this.d.session.setTabletHeld(false);
       this.d.session.reportTabletDrop();
       this.d.ui.toast(reason === 'impact' ? 'TABLET KNOCKED AWAY!' : reason === 'gforce' ? 'TABLET SLIPPED!' : 'LOST GRIP!', 'bad');
-      if (this.d.mode === 'solo') this.aiRegrab = 2.2 + Math.random() * 1.5;
+      if (this.aiNav) this.aiRegrab = 2.2 + Math.random() * 1.5;
     }
   }
 
@@ -803,6 +838,7 @@ export class Game {
     if (this.vehicle && !frozen) this.emitDriveParticles(dt);
     this.props.updateMeshes(alpha, dt);
     this.animals.updateMeshes(alpha, dt, this.cs.pos);
+    this.opponents?.update(dt, this.primaryCamera.getWorldPosition(_v2));
     for (const snd of this.animals.drainSounds()) this.playAnimal(snd);
     this.sky.update(this.cs.pos);
     if (this.cinematic) {
@@ -871,6 +907,8 @@ export class Game {
       inp.brake = this.seats.driver ? clamp(0.05 + t * 0.08, 0, 0.35) : 0;
       inp.steer = this.seats.driver ? this.roadFollowSteer() : 0;
     }
+    v.assist = difficultyOf(this.stage.params).handling;
+    this.applyDrivingAssist(inp);
     // open doors drag the car and pull it to one side; bushes slow it down
     const speed = this.cs.speed;
     const sl = Math.sin(this.doors.left.angle);
@@ -986,6 +1024,18 @@ export class Game {
     }
   }
 
+  /**
+   * EASY / NORMAL difficulty: the driver can't see the map, so the car brakes
+   * for a corner it is far too fast for, and nudges the steering back when it
+   * drifts to the edge of the road.
+   */
+  private applyDrivingAssist(inp: { throttle: number; brake: number; steer: number; handbrake: boolean }) {
+    if (this.phase !== 'racing' || !this.seats.driver) return;
+    const v = this.vehicle!;
+    const loc = this.locator.locate(this.cs.pos.x, this.cs.pos.z, this.assistLoc);
+    applyAssistInput(v.assist, this.stage, loc, v.forwardSpeed, inp, ROAD_SAMPLE_SPACING);
+  }
+
   /** Steering towards the road a little ahead (the driver coasting after the finish line). */
   private roadFollowSteer(): number {
     const s = this.stage;
@@ -1013,7 +1063,7 @@ export class Game {
       // the right hand is busy (pointing, door) -> the object is held one-handed
       cabin.oneHanded = nc.pointing || this.closingDoorTimer.right > 0;
       if (cabin.held >= 0) cabin.setHoldTarget(this.holdPos, this.holdQuat);
-    } else if (this.d.mode === 'solo') this.aiCabin(dt);
+    } else if (this.aiNav) this.aiCabin(dt);
     cabin.step(dt, _g);
     if (this.d.mode === 'online' && nc && this.steps % 3 === 0) this.sendCabin();
     if (!this.vehicle) this.steps++;
@@ -1248,7 +1298,7 @@ export class Game {
       nyaw = this.navControls.lookYaw;
       npitch = this.navControls.lookPitch;
       this.navView.lean = this.navControls.lean;
-    } else if (this.d.mode === 'solo') {
+    } else if (this.aiNav) {
       // AI passenger looks at the tablet it holds (its head lamp follows), glances at the road now and then
       this.aiTimer += dt;
       this.aiGlance -= dt;
@@ -1404,12 +1454,12 @@ export class Game {
     for (const side of ['left', 'right'] as DoorSide[]) {
       if (this.closingDoorTimer[side] > 0) {
         this.closingDoorTimer[side] -= dt;
-        const mine = side === 'left' ? this.roles.includes('driver') : this.roles.includes('navigator') || this.d.mode === 'solo';
+        const mine = side === 'left' ? this.roles.includes('driver') : this.roles.includes('navigator') || this.aiNav;
         if (this.closingDoorTimer[side] <= 0 && mine) this.d.session.closeDoor(side);
       }
     }
     // the AI passenger closes their door after a moment
-    if (this.d.mode === 'solo' && this.doorStates.right && this.closingDoorTimer.right <= 0 && Math.random() < dt * 0.4) this.closingDoorTimer.right = 0.75;
+    if (this.aiNav && this.doorStates.right && this.closingDoorTimer.right <= 0 && Math.random() < dt * 0.4) this.closingDoorTimer.right = 0.75;
   }
 
   private wipeTargetUV(): { u: number; v: number } {
@@ -1468,6 +1518,11 @@ export class Game {
   private updateNavigation(dt: number, now: number) {
     const loc = this.locator.locate(this.cs.pos.x, this.cs.pos.z);
     this.ins = this.phase === 'loading' ? null : computeInstruction(this.stage, loc.idx, this.cs.speed);
+    // harder difficulties: the tablet only shows the next call once it is close
+    const callRange = difficultyOf(this.stage.params).tabletCallRange;
+    if (this.ins && this.ins.corner && this.ins.distance > callRange) {
+      this.ins = { ...this.ins, kind: 'straight', text: 'FOLLOW THE ROAD', corner: null, then: null, brakeNow: false, straightFor: null };
+    }
     // can the navigator actually see the screen?
     const eye = this.navView.eyeLocal;
     const tg = this.tablet.group;
@@ -1519,6 +1574,7 @@ export class Game {
         wrongWay: !!st?.wrongWay,
         flash: this.flash,
         animals: this.animals.markers(this.animalMarkers),
+        rivals: this.opponents?.positions(),
         banner: this.phase === 'countdown' ? 'GET READY…' : this.phase === 'finished' ? 'STAGE COMPLETE!' : null,
         now,
       });
@@ -1721,6 +1777,11 @@ export class Game {
     if (this.d.mode === 'online') status = `${s.status === 'online' ? '● ONLINE' : `● ${String(s.status).toUpperCase()}`}${s.rtt ? ` ${Math.round(s.rtt)}ms` : ''}`;
     const tabHeld = this.d.input.isDown('Tab') && !this.cinematic;
     const stuckRecent = now < this.stuckNoticeUntil;
+    // versus: our place and the field
+    const sd = this.standings;
+    const mine = sd?.entries.find((e) => e.team === this.d.myTeam);
+    const place = mine && sd ? `P${mine.position}/${sd.entries.length}` : null;
+    const board = sd ? sd.entries.map((e) => ({ pos: e.position, name: e.names[0], team: e.team, me: e.team === this.d.myTeam, state: e.dnf ? 'DNF' : e.finished ? fmtClock(e.timeMs) : `${Math.round(e.progress * 100)}%` })) : null;
     this.hudViews.forEach((v, i) => {
       const onFoot = !this.seats[v.role];
       const data: HudData = {
@@ -1737,6 +1798,8 @@ export class Game {
         glare: v.role === 'driver' && this.driverControls ? this.glare : 0,
         onFoot,
         crosshair: v.role === 'navigator' && !onFoot && !!this.navControls?.crosshair && !this.cinematic,
+        place,
+        board,
       };
       const warns: string[] = [];
       if (onFoot) {
@@ -1804,6 +1867,7 @@ export class Game {
     this.veg?.dispose();
     this.props?.dispose();
     this.animals?.dispose();
+    this.opponents?.dispose();
     this.vehicle?.dispose();
     this.car?.dispose();
     this.cockpit?.dispose();

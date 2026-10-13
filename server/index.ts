@@ -9,6 +9,7 @@ import { Server } from 'socket.io';
 import type { ClientToServerEvents, ServerToClientEvents } from '../src/shared/protocol';
 import { registerHandlers } from './networking/registerHandlers';
 import { RoomManager } from './rooms/RoomManager';
+import { StatsStore } from './stats/StatsStore';
 
 function loadDotEnv() {
   const file = path.resolve(process.cwd(), '.env');
@@ -37,7 +38,20 @@ const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
   pingTimeout: 10000,
   connectionStateRecovery: undefined,
 });
-const rooms = new RoomManager(io, GRACE_MS);
+// player statistics (Postgres via DATABASE_URL, else an embedded Postgres on disk)
+let stats: StatsStore | null = null;
+try {
+  stats = await StatsStore.open();
+  console.log(`[left-left-left] stats database: ${stats.kind}${stats.kind === 'pglite' ? ' (local folder - set DATABASE_URL for a hosted Postgres)' : ''}`);
+} catch (err) {
+  console.error('[left-left-left] stats database unavailable - races are not recorded', err);
+}
+const rooms = new RoomManager(io, GRACE_MS, (summary) => {
+  stats
+    ?.recordRace(summary)
+    .then((r) => console.log(`[stats] race ${summary.raceId.slice(0, 8)} (${summary.mode}): ${r.recorded} recorded, ${r.skipped} skipped`))
+    .catch((err) => console.error('[stats] recording failed', err));
+});
 registerHandlers(io, rooms);
 
 // CORS for plain HTTP routes too, so a client hosted elsewhere (e.g. Netlify)
@@ -47,8 +61,59 @@ app.use((req, res, next) => {
   if (origin && (!ALLOWED_ORIGINS || ALLOWED_ORIGINS.includes(origin))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Vary', 'Origin');
+    // the profile endpoints take JSON posts from the client's origin (preflight)
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'content-type');
   }
+  if (req.method === 'OPTIONS') return void res.sendStatus(204);
   next();
+});
+
+// --- profiles (read-only stats + optional name protection) -----------------------
+app.use('/api', express.json({ limit: '2kb' }));
+const apiHits = new Map<string, { n: number; at: number }>();
+const apiLimited = (ip: string, perMinute: number) => {
+  const now = Date.now();
+  const e = apiHits.get(ip);
+  if (!e || now - e.at > 60000) {
+    apiHits.set(ip, { n: 1, at: now });
+    return false;
+  }
+  e.n++;
+  return e.n > perMinute;
+};
+setInterval(() => apiHits.clear(), 10 * 60000).unref();
+const nameOf = (v: unknown) => (typeof v === 'string' && v.trim().length > 0 && v.length <= 40 ? v : null);
+app.get('/api/profile', async (req, res) => {
+  if (!stats) return void res.status(503).json({ error: 'Statistics are not available on this server' });
+  if (apiLimited(req.ip ?? '?', 60)) return void res.status(429).json({ error: 'Too many requests' });
+  const name = nameOf(req.query.name);
+  if (!name) return void res.status(400).json({ error: 'Name required' });
+  try {
+    const p = await stats.profile(name);
+    if (!p) return void res.status(404).json({ exists: false });
+    res.json({ exists: true, profile: p });
+  } catch (err) {
+    console.error('[stats] profile', err);
+    res.status(500).json({ error: 'Could not load the profile' });
+  }
+});
+app.post('/api/profile/protect', async (req, res) => {
+  if (!stats) return void res.status(503).json({ error: 'Statistics are not available on this server' });
+  if (apiLimited(req.ip ?? '?', 10)) return void res.status(429).json({ error: 'Too many requests' });
+  const name = nameOf(req.body?.name);
+  if (!name) return void res.status(400).json({ error: 'Name required' });
+  const code = typeof req.body?.code === 'string' ? req.body.code.slice(0, 40) : undefined;
+  const r = await stats.protect(name, code).catch(() => ({ ok: false as const, error: 'Could not protect the name' }));
+  res.status(r.ok ? 200 : 403).json(r);
+});
+app.post('/api/profile/verify', async (req, res) => {
+  if (!stats) return void res.status(503).json({ error: 'Statistics are not available on this server' });
+  if (apiLimited(req.ip ?? '?', 20)) return void res.status(429).json({ error: 'Too many requests' });
+  const name = nameOf(req.body?.name);
+  if (!name) return void res.status(400).json({ error: 'Name required' });
+  const code = typeof req.body?.code === 'string' ? req.body.code.slice(0, 40) : undefined;
+  res.json(await stats.verify(name, code).catch(() => ({ exists: false, protected: false, ok: false })));
 });
 
 app.get('/health', (_req, res) => {
@@ -83,6 +148,7 @@ httpServer.listen(PORT, () => {
 
 const shutdown = () => {
   io.close();
+  void stats?.close();
   httpServer.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 1500).unref();
 };

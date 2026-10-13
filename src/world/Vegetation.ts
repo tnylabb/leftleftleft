@@ -169,6 +169,8 @@ export class Vegetation {
           }
           const q = this.field.queryRoad(x, z);
           const d = q.dist;
+          // vegetation follows the actual road width (narrower roads on harder stages)
+          const HW = q.dist < Infinity ? this.field.halfWidthAt(q.idx) : ROAD_HALF_WIDTH;
           if (d < HW + 1.0) continue;
           const f = Math.min(1, Math.max(0.06, 0.55 + forest.fbm(x / 140, z / 140, 2) * 1.1));
           const roll = r.next();

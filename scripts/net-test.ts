@@ -49,7 +49,11 @@ const joined = await ack<JoinAck>((cb) => nav.emit('room:join', { code: created.
 check(joined.ok, 'navigator joined');
 const third = await connect();
 const full = await ack<JoinAck>((cb) => third.emit('room:join', { code: created.code!, name: 'Third' }, cb));
-check(!full.ok, `third player rejected ("${full.error}")`);
+// rooms hold up to four (for the versus modes); in co-op a third player waits without a seat
+const thirdSeat = full.room?.players.find((p) => p.id === full.playerId);
+check(full.ok && thirdSeat?.team === null && thirdSeat?.role === null, 'a third player in a co-op room waits without a seat');
+third.emit('room:leave');
+await sleep(150);
 third.disconnect();
 
 let room: RoomSnapshot = joined.room!;
