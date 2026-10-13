@@ -25,7 +25,8 @@ interface Road {
   checkpoints: Checkpoint[];
 }
 
-export function placeAnimals(params: StageParams, r: Road): AnimalSpawn[] {
+/** `more` scales the number of flocks and cows (harder difficulties). */
+export function placeAnimals(params: StageParams, r: Road, more = 1): AnimalSpawn[] {
   const rng = new Rng(hash2(params.seed, 0xa11e));
   const mountain = params.map === 'mountain';
   const out: AnimalSpawn[] = [];
@@ -47,7 +48,7 @@ export function placeAnimals(params: StageParams, r: Road): AnimalSpawn[] {
   const len = params.length === 'short' ? 0 : params.length === 'medium' ? 1 : 2;
 
   // flocks of sheep: grazing beside the road, a couple of them always on it
-  const flocks = (mountain ? 1 : 2) + len;
+  const flocks = Math.round(((mountain ? 1 : 2) + len) * more);
   for (let f = 0, tries = 0; f < flocks && tries < 80; tries++) {
     const i = rng.int(r.startIdx + 70, r.finishIdx - 45);
     if (!free(i)) continue;
@@ -65,7 +66,7 @@ export function placeAnimals(params: StageParams, r: Road): AnimalSpawn[] {
   }
 
   // cows: standing on the road just after a corner, so they appear late
-  const cows = 1 + len;
+  const cows = Math.round((1 + len) * more);
   const corners = r.corners.filter((c) => c.severity === 'medium' || c.severity === 'hard');
   for (let c = 0, tries = 0; c < cows && tries < 60 && corners.length; tries++) {
     const corner = corners[rng.int(0, corners.length - 1)];

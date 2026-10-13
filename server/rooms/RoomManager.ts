@@ -2,7 +2,7 @@ import type { Server } from 'socket.io';
 import { ROOM_CODE_LENGTH } from '../../src/shared/constants';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../src/shared/protocol';
 import { ROOM_CODE_ALPHABET } from '../validation/payloads';
-import { Room } from './Room';
+import { Room, type RaceSummary } from './Room';
 
 export type GameServer = Server<ClientToServerEvents, ServerToClientEvents>;
 
@@ -12,6 +12,8 @@ export class RoomManager {
   constructor(
     private io: GameServer,
     private graceMs: number,
+    /** Finished races (stats). */
+    private onRaceComplete: ((s: RaceSummary) => void) | null = null,
   ) {
     // sweep empty rooms
     setInterval(() => {
@@ -38,6 +40,7 @@ export class RoomManager {
       room.dispose();
       this.rooms.delete(code);
     });
+    room.onRaceComplete = this.onRaceComplete;
     this.rooms.set(code, room);
     return room;
   }

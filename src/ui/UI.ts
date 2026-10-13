@@ -5,16 +5,32 @@ import type { AudioEngine } from '../audio/AudioEngine';
 import type { Settings, SettingsData } from '../core/Settings';
 import { GAME_TAGLINE, type StageLength } from '../shared/constants';
 import { FACES, HELMETS, LIVERIES, SKINS, SUITS, type PlayerStyle } from '../shared/style';
+import { DIFFICULTIES, DIFFICULTY, type Difficulty } from '../shared/difficulty';
+import { MODE_SPEC, ROOM_MODES, TEAM_COLORS, TEAM_NAMES, type RoomMode, type Standings } from '../shared/modes';
 import type { RaceResults, Role, RoomSnapshot, StageMap } from '../shared/types';
 import type { ConnectionStatus } from '../multiplayer/Session';
 import type { VoiceState } from '../multiplayer/VoiceChat';
 import { NAV_HOTKEYS, CALLOUT_TEXT } from '../navigation/Callouts';
 import type { BindMode } from '../core/Bindings';
+import type { ProfileStats } from '../core/Profiles';
 import { referenceHtml, type Row } from './controlsHelp';
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-export type ScreenName = 'menu' | 'lobby' | 'garage' | 'loading' | 'pause' | 'settings' | 'help' | 'results' | 'fatal';
+export type ScreenName = 'menu' | 'lobby' | 'garage' | 'loading' | 'pause' | 'settings' | 'help' | 'results' | 'profile' | 'fatal';
+
+export interface ProfileView {
+  name: string;
+  loading: boolean;
+  error: string | null;
+  profile: ProfileStats | null;
+  /** Recovery code saved in this browser for this name. */
+  savedCode: string | null;
+  /** Just created: shown once, big. */
+  newCode: string | null;
+  showCode: boolean;
+  message: string | null;
+}
 
 const css = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
 
@@ -42,6 +58,9 @@ export interface HudData {
   onFoot: boolean;
   /** Navigator interacting through the centre crosshair (mouse captured). */
   crosshair?: boolean;
+  /** Versus: our place ("P2/4") and the field. */
+  place?: string | null;
+  board?: { pos: number; name: string; team: number; me: boolean; state: string }[] | null;
 }
 
 const fmtTime = (ms: number) => {
@@ -85,8 +104,9 @@ export class UI {
       <div class="screen dim-bg" id="scr-results"></div>
       <div class="screen dim-bg" id="scr-help"></div>
       <div class="screen dim-bg" id="scr-settings"></div>
+      <div class="screen dim-bg" id="scr-profile"></div>
       <div class="screen menu-bg fatal" id="scr-fatal"></div>`;
-    for (const n of ['menu', 'lobby', 'garage', 'loading', 'pause', 'settings', 'help', 'results', 'fatal'] as ScreenName[]) {
+    for (const n of ['menu', 'lobby', 'garage', 'loading', 'pause', 'settings', 'help', 'results', 'profile', 'fatal'] as ScreenName[]) {
       this.screens.set(n, root.querySelector(`#scr-${n}`) as HTMLElement);
     }
     this.hud = root.querySelector('#hud') as HTMLElement;
@@ -122,8 +142,14 @@ export class UI {
     return this.screens.get(name)!.classList.contains('show');
   }
 
+  /** RALLY_STANDARD / HARD / EXPERT picker (the same for everyone in a room). */
+  private difficultyPicker(cur: Difficulty, action: string, enabled: boolean): string {
+    return `<div class="seg diff-seg">${DIFFICULTIES.map((d) => `<button class="btn small ${cur === d ? 'selected' : ''}" data-action="${action}" data-difficulty="${d}" title="${esc(DIFFICULTY[d].blurb)}" ${enabled ? '' : 'disabled'}><span>${DIFFICULTY[d].label}</span></button>`).join('')}</div>
+      <div class="muted small diff-sub"><b>${DIFFICULTY[cur].code}</b> · ${esc(DIFFICULTY[cur].blurb)}</div>`;
+  }
+
   // --- menu ------------------------------------------------------------------
-  renderMenu(opts: { server: ConnectionStatus | 'checking'; seat: string | null; length: StageLength; night: boolean; map: StageMap; error?: string }) {
+  renderMenu(opts: { server: ConnectionStatus | 'checking'; seat: string | null; length: StageLength; night: boolean; map: StageMap; difficulty: Difficulty; error?: string }) {
     const s = this.screens.get('menu')!;
     const name = esc(this.settings.data.name);
     const statusText =
@@ -147,7 +173,10 @@ export class UI {
           <label class="field">Your name
             <input type="text" id="in-name" maxlength="16" value="${name}" data-enter="create">
           </label>
-          <button class="btn look-btn" data-action="garage"><span>CHANGE YOUR LOOK<span class="sub">Helmet, race suit, face and the car's livery</span></span></button>
+          <div class="row">
+            <button class="btn look-btn grow" data-action="garage"><span>CHANGE YOUR LOOK<span class="sub">Helmet, suit, face, livery</span></span></button>
+            <button class="btn look-btn grow" data-action="profile"><span>YOUR STATS<span class="sub">Races, wins, best times</span></span></button>
+          </div>
           <div class="error-box ${opts.error ? 'show' : ''}">${esc(opts.error ?? '')}</div>
           <div class="section-label">PLAY ONLINE</div>
           ${opts.seat ? `<button class="btn green" data-action="rejoin"><span>REJOIN ROOM ${esc(opts.seat)}<span class="sub">Get back into your running session</span></span></button>` : ''}
@@ -166,6 +195,7 @@ export class UI {
             <div class="seg"><button class="btn small ${opts.map === 'countryside' ? 'selected' : ''}" data-action="map" data-map="countryside"><span>COUNTRYSIDE</span></button><button class="btn small ${opts.map === 'mountain' ? 'selected' : ''}" data-action="map" data-map="mountain"><span>MOUNTAIN</span></button></div>
             <div class="seg">${lenBtn('short', 'SHORT')}${lenBtn('medium', 'MEDIUM')}${lenBtn('long', 'LONG')}</div>
             <div class="seg"><button class="btn small ${!opts.night ? 'selected' : ''}" data-action="time" data-night="0"><span>DAY</span></button><button class="btn small ${opts.night ? 'selected' : ''}" data-action="time" data-night="1"><span>NIGHT</span></button></div>
+            ${this.difficultyPicker(opts.difficulty, 'difficulty', true)}
           </div>
           <div class="row">
             <button class="btn dark small grow" data-action="settings"><span>SETTINGS</span></button>
@@ -189,17 +219,31 @@ export class UI {
     const s = this.screens.get('lobby')!;
     const me = room.players.find((p) => p.id === myId);
     const host = !!me?.isHost;
-    const crewRow = (i: number) => {
-      const p = room.players[i];
-      if (!p) return `<div class="crew-row empty"><span class="crew-name">Waiting for a co-driver…</span><span class="small muted">share the room code</span></div>`;
-      return `<div class="crew-row ${p.id === myId ? 'me' : ''}">
-        <span class="role-badge ${p.role ?? ''}">${p.role ? p.role.toUpperCase() : 'NO ROLE'}</span>
+    const spec = MODE_SPEC[room.mode];
+    const seated = room.players.filter((p) => p.team !== null);
+    const badge = (role: Role | null) => `<span class="role-badge ${role ?? ''}">${role ? role.toUpperCase() : 'NO ROLE'}</span>`;
+    const playerRow = (p: RoomSnapshot['players'][number]) => `<div class="crew-row ${p.id === myId ? 'me' : ''}">
+        ${badge(p.role)}
         <span class="crew-name">${esc(p.name)}${p.id === myId ? ' <span class="small muted">(you)</span>' : ''}${p.isHost ? ' <span class="small muted">· host</span>' : ''}</span>
         ${p.connected ? '' : '<span class="small" style="color:var(--yellow)">reconnecting…</span>'}
         <span class="ready ${p.ready ? 'yes' : ''}">${p.ready ? 'READY' : 'NOT READY'}</span>
       </div>`;
-    };
-    const taken = (r: Role) => room.players.some((p) => p.role === r && p.id !== myId);
+    // one card per car
+    const crews = Array.from({ length: spec.teams }, (_, t) => {
+      const members = room.players.filter((p) => p.team === t).sort((x, y) => (x.role === 'driver' ? 0 : 1) - (y.role === 'driver' ? 0 : 1));
+      const free = spec.crew - members.length;
+      const title = spec.versus ? `${TEAM_NAMES[t]} CAR` : 'YOUR CAR';
+      const join = room.mode === '2v2' && me && me.team !== t && free > 0 ? `<button class="btn small" data-action="team" data-team="${t}"><span>JOIN</span></button>` : '';
+      return `<div class="crew-card" style="--team:${TEAM_COLORS[t]}">
+          <div class="crew-head"><span>${title}</span>${join}</div>
+          ${members.map(playerRow).join('')}
+          ${Array.from({ length: Math.max(0, free) }, () => `<div class="crew-row empty"><span class="crew-name">Free seat</span><span class="small muted">share the room code</span></div>`).join('')}
+          ${spec.crew === 1 ? '<div class="crew-ai">+ AI NAVIGATOR <span class="small muted">holds the tablet and reads the notes</span></div>' : ''}
+        </div>`;
+    }).join('');
+    const waiting = room.players.filter((p) => p.team === null);
+    const myCrew = me && me.team !== null ? room.players.filter((p) => p.team === me.team && p.id !== myId) : [];
+    const taken = (r: Role) => myCrew.some((p) => p.role === r);
     const icon = (r: Role) =>
       r === 'driver'
         ? '<svg viewBox="0 0 40 40" class="role-icon"><circle cx="20" cy="20" r="15" fill="none" stroke="currentColor" stroke-width="4"/><circle cx="20" cy="20" r="4" fill="currentColor"/><path d="M5 20h11M24 20h11M20 24v11" stroke="currentColor" stroke-width="4"/></svg>'
@@ -208,9 +252,11 @@ export class UI {
       `<button class="btn role-tile ${r} ${me?.role === r ? 'selected' : ''}" data-action="role" data-role="${r}" ${taken(r) ? 'disabled' : ''}><span>${icon(r)}<span class="role-text">${title}${taken(r) ? ' <span class="small">(taken)</span>' : ''}<span class="sub">${sub}</span></span></span></button>`;
     const len = (l: StageLength, label: string) =>
       `<button class="btn small ${room.stage.length === l ? 'selected' : ''}" data-action="stage" data-length="${l}" ${host ? '' : 'disabled'}><span>${label}</span></button>`;
-    const bothRoles = room.players.length === 2 && room.players.every((p) => p.role);
-    const voiceHtml = voice
-      ? `<div class="voice-row"><span class="muted">Voice chat:</span>
+    const modeBtn = (m: RoomMode) => `<button class="btn small ${room.mode === m ? 'selected' : ''}" data-action="mode" data-mode="${m}" title="${esc(MODE_SPEC[m].blurb)}" ${host ? '' : 'disabled'}><span>${MODE_SPEC[m].label}</span></button>`;
+    const ready = room.players.length === spec.players && seated.every((p) => p.role);
+    const voiceHtml =
+      voice && spec.crew === 2
+        ? `<div class="voice-row"><span class="muted">Voice chat (your crew):</span>
           ${voice.state === 'off' || voice.state === 'error'
             ? `<button class="btn small" data-action="voice-on"><span>ENABLE MIC</span></button>`
             : `<button class="btn small" data-action="voice-off"><span>DISABLE</span></button>
@@ -218,8 +264,17 @@ export class UI {
                <span class="small">${voice.state}</span><div class="meter"><div id="mic-meter"></div></div>`}
           ${voice.error ? `<span class="small" style="color:#ff8a7a">${esc(voice.error)}</span>` : ''}
           <span class="small muted">or use Discord / any voice app</span></div>`
-      : '';
-    const hint = msg || (room.players.length < 2 ? 'Send the code to your co-driver. They open this page and choose JOIN WITH CODE.' : !bothRoles ? 'Pick different roles.' : 'Both players must be ready to start.');
+        : '';
+    const missing = spec.players - room.players.length;
+    const hint =
+      msg ||
+      (missing > 0
+        ? `${spec.label} needs ${spec.players} players - ${missing} more. Send them the room code; they choose JOIN WITH CODE.`
+        : missing < 0
+          ? `${spec.label} is for ${spec.players} players: ${-missing} of you have no seat. The host can pick another mode.`
+          : !ready
+            ? 'Pick your roles.'
+            : 'Everybody ready? Then go!');
     s.innerHTML = `
       <div class="lobby-layout">
         <div class="lobby-hero">
@@ -235,24 +290,29 @@ export class UI {
             <h2 class="tape">LOBBY</h2>
             <div class="chip"><span class="status-dot ${status}"></span>${status}</div>
           </div>
-          <div class="section-label">YOUR ROLE</div>
+          <div class="section-label">MODE${host ? '' : ' <span class="muted small">(host decides)</span>'} <span class="muted small">${room.players.length}/${spec.players} players</span></div>
+          <div class="seg wrap mode-seg">${ROOM_MODES.map(modeBtn).join('')}</div>
+          <div class="muted small">${esc(spec.blurb)}</div>
+          <div class="section-label">${spec.teams > 1 ? 'CARS' : 'CREW'}</div>
+          <div class="crews ${spec.teams > 2 ? 'many' : ''}">${crews}</div>
+          ${waiting.length ? `<div class="section-label">WAITING <span class="muted small">no seat in this mode</span></div><div class="crew">${waiting.map(playerRow).join('')}</div>` : ''}
+          ${spec.crew === 2 && me?.team !== null && me ? `<div class="section-label">YOUR ROLE</div>
           <div class="role-pick">
             ${roleBtn('driver', 'DRIVER', 'Steer, brake, survive. No map for you.')}
             ${roleBtn('navigator', 'NAVIGATOR', 'Hold the tablet. Shout. Don’t drop it.')}
-          </div>
+          </div>` : ''}
           <button class="btn small look-btn" data-action="garage"><span>CHANGE YOUR LOOK</span></button>
-          <div class="section-label">CREW</div>
-          <div class="crew">${crewRow(0)}${crewRow(1)}</div>
           <div class="section-label">STAGE${host ? '' : ' <span class="muted small">(host decides)</span>'}</div>
           <div class="stage-card">
             <div class="seg"><button class="btn small ${room.stage.map === 'countryside' ? 'selected' : ''}" data-action="stage-map" data-map="countryside" ${host ? '' : 'disabled'}><span>COUNTRYSIDE</span></button><button class="btn small ${room.stage.map === 'mountain' ? 'selected' : ''}" data-action="stage-map" data-map="mountain" ${host ? '' : 'disabled'}><span>MOUNTAIN</span></button></div>
             <div class="seg">${len('short', 'SHORT')}${len('medium', 'MEDIUM')}${len('long', 'LONG')}</div>
             <div class="seg"><button class="btn small ${!room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="0" ${host ? '' : 'disabled'}><span>DAY</span></button><button class="btn small ${room.stage.night ? 'selected' : ''}" data-action="stage-time" data-night="1" ${host ? '' : 'disabled'}><span>NIGHT</span></button></div>
+            ${this.difficultyPicker(room.stage.difficulty ?? 'standard', 'stage-difficulty', host)}
             <div class="row"><span class="muted small">seed ${room.stage.seed}</span>${host ? `<button class="btn small dark" data-action="reroll"><span>NEW ROAD</span></button>` : ''}</div>
           </div>
           ${voiceHtml}
           <div class="row" style="margin-top:6px">
-            <button class="btn primary grow big ${me?.role && bothRoles && !me.ready ? 'pulse' : ''}" data-action="ready" ${me?.role && bothRoles ? '' : 'disabled'}><span>${me?.ready ? 'NOT READY' : 'READY!'}</span></button>
+            <button class="btn primary grow big ${me?.role && ready && !me.ready ? 'pulse' : ''}" data-action="ready" ${me?.role && me.team !== null ? '' : 'disabled'}><span>${me?.ready ? 'NOT READY' : 'READY!'}</span></button>
             <button class="btn dark" data-action="leave"><span>LEAVE</span></button>
           </div>
         </div>
@@ -335,7 +395,8 @@ export class UI {
       el.innerHTML = `
         ${v.role === 'driver' ? '<div class="hud-glare"></div>' : ''}
         <div class="hud-role ${v.role}">${v.role.toUpperCase()}</div>
-        <div class="hud-time"><span class="t">0:00.00</span><span class="cp"></span></div>
+        <div class="hud-time"><span class="t">0:00.00</span><span class="cp"></span><span class="place"></span></div>
+        <div class="hud-board"></div>
         <div class="hud-status"></div>
         <div class="hud-warn"></div>
         ${v.role === 'driver' ? `<div class="hud-speed"><span class="v">0</span><span class="g">1</span><div class="u">KM/H</div></div>` : ''}
@@ -395,6 +456,17 @@ export class UI {
       if (w) {
         w.textContent = d.warn ?? '';
         w.classList.toggle('show', !!d.warn);
+      }
+    }
+    const boardKey = d.board ? d.board.map((b) => `${b.pos}${b.name}${b.state}`).join('|') + (d.place ?? '') : '';
+    if (boardKey !== el.dataset.board) {
+      el.dataset.board = boardKey;
+      const pl = q('.hud-time .place');
+      if (pl) pl.textContent = d.place ?? '';
+      const bd = q('.hud-board');
+      if (bd) {
+        bd.style.display = d.board ? 'block' : 'none';
+        bd.innerHTML = (d.board ?? []).map((b) => `<div class="bd-row ${b.me ? 'me' : ''}"><span class="bd-pos" style="background:${TEAM_COLORS[b.team] ?? '#888'}">${b.pos}</span><span class="bd-name">${esc(b.name)}</span><span class="bd-state">${esc(b.state)}</span></div>`).join('');
       }
     }
     const cross = q('.hud-cross');
@@ -574,6 +646,7 @@ export class UI {
           ${range('collisionVolume', 'Collisions & cabin', 0, 1, 0.05)}
           ${range('voiceVolume', 'Voice & callouts', 0, 1, 0.05)}
           ${range('uiVolume', 'Interface', 0, 1, 0.05)}
+          ${range('musicVolume', 'Music', 0, 1, 0.05)}
           ${range('mouseSensitivity', 'Mouse sensitivity', 0.3, 2.5, 0.05)}
           ${range('fov', 'Field of view', 52, 82, 1)}
           ${range('cameraShake', 'Cabin motion intensity', 0, 1.5, 0.05)}
@@ -605,18 +678,27 @@ export class UI {
   }
 
   // --- results -------------------------------------------------------------------
-  renderResults(r: RaceResults, mode: 'online' | 'couch' | 'solo', votes: { mine: string | null; partner: string | null }) {
+  renderResults(r: RaceResults, mode: 'online' | 'couch' | 'solo', votes: { mine: string | null; partner: string | null }, standings: Standings | null = null, myTeam: number | null = null) {
     const s = this.screens.get('results')!;
+    const mine = standings?.entries.find((e) => e.team === myTeam) ?? null;
+    const heading = r.dnf ? 'DID NOT FINISH' : mine && standings ? (standings.final && mine.position === 1 ? 'YOU WIN!' : `P${mine.position} OF ${standings.entries.length}`) : 'STAGE COMPLETE';
+    const closes = standings && !standings.final && standings.closesAt ? Math.max(0, Math.round((standings.closesAt - Date.now()) / 1000)) : null;
+    const table = standings
+      ? `<div class="standings">
+          <div class="section-label">${standings.final ? 'FINAL CLASSIFICATION' : `LIVE - WAITING FOR THE OTHERS${closes !== null ? ` (max ${closes}s)` : ''}`}</div>
+          ${standings.entries.map((e) => `<div class="st-row ${e.team === myTeam ? 'me' : ''}"><span class="st-pos" style="background:${TEAM_COLORS[e.team] ?? '#888'}">${e.position}</span><span class="st-name">${esc(e.names.join(' + '))}</span><span class="st-time">${e.dnf ? 'DNF' : e.finished ? fmtTime(e.timeMs) : `${Math.round(e.progress * 100)}%`}</span><span class="st-x small muted">${e.crashes} crashes · ${e.missedTurns} missed</span></div>`).join('')}
+        </div>`
+      : '';
     const stat = (k: string, v: string) => `<div class="stat"><div class="k">${k}</div><div class="v">${v}</div></div>`;
     const voteInfo =
       mode === 'online'
-        ? `<p class="muted small">${votes.mine ? `You voted <b>${votes.mine.toUpperCase()}</b>. ` : ''}${votes.partner ? `Partner voted <b>${votes.partner.toUpperCase()}</b>.` : 'Waiting for your partner to vote…'}</p>`
+        ? `<p class="muted small">${votes.mine ? `You voted <b>${votes.mine.toUpperCase()}</b>. ` : ''}${votes.partner ? `Others voted <b>${votes.partner.toUpperCase()}</b>.` : 'Waiting for the others to vote…'}</p>`
         : '';
     s.innerHTML = `
       <div class="panel results stack">
         <div class="row" style="justify-content:space-between;align-items:flex-start">
           <div>
-            <h2 class="tape">STAGE COMPLETE</h2>
+            <h2 class="tape">${heading}</h2>
             <div class="result-title">${esc(r.title)}</div>
             <div class="big-time">${fmtTime(r.finalTimeMs)}</div>
             <div class="muted small">stage time ${fmtTime(r.timeMs)} + penalties ${fmtTime(r.penaltiesMs)}</div>
@@ -635,6 +717,7 @@ export class UI {
           ${stat('Emergency resets', String(r.resets ?? 0))}
           ${stat('Stage seed', String(r.seed))}
         </div>
+        ${table}
         ${voteInfo}
         <div class="row">
           <button class="btn primary" data-action="restart-new"><span>NEXT STAGE (NEW ROAD)</span></button>
@@ -643,6 +726,81 @@ export class UI {
           <button class="btn dark" data-action="quit"><span>MAIN MENU</span></button>
         </div>
       </div>`;
+  }
+
+  // --- profile / statistics --------------------------------------------------
+  renderProfile(v: ProfileView) {
+    const s = this.screens.get('profile')!;
+    const p = v.profile;
+    const t = p?.totals;
+    const ms = (x: number | null) => (x === null ? '-' : fmtTime(x));
+    const stat = (k: string, val: string) => `<div class="stat"><div class="k">${k}</div><div class="v">${val}</div></div>`;
+    const pct = (x: number | null) => (x === null ? '-' : `${Math.round(x * 100)}%`);
+    const stages = p?.byStage.length
+      ? `<table class="ptable"><tr><th>Map</th><th>Difficulty</th><th>Length</th><th>Races</th><th>Done</th><th>Wins</th><th>Best</th></tr>${p.byStage
+          .map((r) => `<tr><td>${esc(r.map)}</td><td>${esc(r.difficulty)}</td><td>${esc(r.length)}</td><td>${r.races}</td><td>${r.completed}</td><td>${r.wins}</td><td>${ms(r.bestMs)}</td></tr>`)
+          .join('')}</table>`
+      : '';
+    const roles = p?.byRole.length
+      ? `<table class="ptable"><tr><th>Role</th><th>Races</th><th>Finished</th><th>Wins</th><th>Best</th><th>Average</th></tr>${p.byRole
+          .map((r) => `<tr><td>${esc(r.role)}</td><td>${r.races}</td><td>${r.completed}</td><td>${r.wins}</td><td>${ms(r.bestMs)}</td><td>${ms(r.avgMs)}</td></tr>`)
+          .join('')}</table>`
+      : '';
+    const recent = p?.recent.length
+      ? `<div class="recent">${p.recent
+          .map(
+            (r) => `<div class="rc-row"><span class="rc-res ${r.won ? 'win' : r.finished ? '' : 'dnf'}">${r.won ? 'WIN' : !r.finished ? 'DNF' : r.teams > 1 ? `P${r.position}/${r.teams}` : 'DONE'}</span><span class="rc-what">${esc(r.mode.toUpperCase())} · ${esc(r.map)} ${esc(r.difficulty)} ${esc(r.length)} · ${esc(r.role)}</span><span class="rc-crew small muted">${esc(r.crew)}</span><span class="rc-time">${r.timeMs !== null ? fmtTime(r.timeMs) : ''}</span></div>`,
+          )
+          .join('')}</div>`
+      : '';
+    const code = v.newCode ?? (v.showCode ? v.savedCode : null);
+    const protect = !p && !v.loading
+      ? ''
+      : v.newCode
+        ? `<div class="protect ok"><b>YOUR RECOVERY CODE</b><div class="code-big">${esc(v.newCode)}</div><span class="small">Saved in this browser. Write it down: on another device, enter it here to keep collecting stats as ${esc(v.name)}.</span></div>`
+        : p?.protected && v.savedCode
+          ? `<div class="protect ok"><b>PROTECTED</b> <span class="small">Your recovery code is saved in this browser.</span>${code ? `<div class="code-big">${esc(code)}</div>` : ''}
+              <div class="row"><button class="btn small" data-action="profile-show-code"><span>${v.showCode ? 'HIDE CODE' : 'SHOW CODE'}</span></button><button class="btn small dark" data-action="profile-rotate"><span>NEW CODE</span></button></div></div>`
+          : p?.protected
+            ? `<div class="protect warn"><b>THIS NAME IS PROTECTED</b> <span class="small">Races you play under it are not added to these stats until you enter its recovery code.</span>
+                <div class="row"><input type="text" id="in-profile-code" maxlength="20" placeholder="LLL-XXXX-XXXX"><button class="btn small" data-action="profile-unlock"><span>UNLOCK</span></button></div></div>`
+            : `<div class="protect"><b>NOT PROTECTED</b> <span class="small">Names are matched without caring about capitals, and anyone can type yours. Protect it with a recovery code so only you add to these stats.</span>
+                <div class="row"><button class="btn small" data-action="profile-protect"><span>PROTECT THIS NAME</span></button></div></div>`;
+    s.innerHTML = `
+      <div class="panel modal-wide stack profile">
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h2 class="tape">YOUR STATS</h2>
+          <button class="btn dark small" data-action="close-profile"><span>CLOSE</span></button>
+        </div>
+        <div class="profile-name">${esc(p?.name ?? v.name)}</div>
+        <p class="muted small">Online races only, recorded by the game server when a race ends. Profiles go by name (capitals and extra spaces don't matter).</p>
+        ${v.message ? `<div class="error-box show">${esc(v.message)}</div>` : ''}
+        ${v.error ? `<div class="error-box show">${esc(v.error)}</div>` : ''}
+        ${v.loading ? '<p>Loading…</p>' : ''}
+        ${!v.loading && !v.error && !p ? `<p>No races recorded for <b>${esc(v.name)}</b> yet. Play an online race and your stats start here.</p>` : ''}
+        ${t ? `<div class="result-grid">
+          ${stat('Races', String(t.races))}
+          ${stat('Finished', String(t.completed))}
+          ${stat('Wins', `${t.wins} <span class="small">/ ${t.versusRaces} versus</span>`)}
+          ${stat('Win rate', pct(t.winRate))}
+          ${stat('Losses', String(t.losses))}
+          ${stat('Best time', ms(t.bestMs))}
+          ${stat('Average time', ms(t.avgMs))}
+          ${stat('Distance', `${t.distanceKm.toFixed(1)} km`)}
+          ${stat('Crashes', String(t.crashes))}
+          ${stat('Missed turns', String(t.missedTurns))}
+          ${stat('Recoveries', String(t.recoveries))}
+          ${stat('Preferred role', t.preferredRole ? t.preferredRole.toUpperCase() : '-')}
+        </div>` : ''}
+        ${roles ? `<div class="section-label">DRIVER VS NAVIGATOR</div>${roles}` : ''}
+        ${stages ? `<div class="section-label">BY MAP AND DIFFICULTY</div>${stages}` : ''}
+        ${recent ? `<div class="section-label">RECENT RESULTS</div>${recent}` : ''}
+        ${protect}
+      </div>`;
+  }
+
+  profileCodeInput(): string {
+    return ((this.root.querySelector('#in-profile-code') as HTMLInputElement | null)?.value ?? '').trim();
   }
 
   fatal(title: string, message: string) {

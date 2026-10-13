@@ -7,6 +7,7 @@ import type { ImpactReport, MudReport } from '../shared/protocol';
 import { generateStage } from '../shared/stage/StageGenerator';
 import type { CalloutId, DoorSide, Role, StageMap, StageParams } from '../shared/types';
 import { GameSession } from './Session';
+import type { Difficulty } from '../shared/difficulty';
 
 export class LocalSession extends GameSession {
   readonly kind = 'local' as const;
@@ -21,9 +22,10 @@ export class LocalSession extends GameSession {
     night: boolean,
     map: StageMap,
     seed?: number,
+    difficulty: Difficulty = 'standard',
   ) {
     super();
-    this.params = { seed: seed ?? ((Math.random() * 0xffffffff) >>> 0), length, night, map };
+    this.params = { seed: seed ?? ((Math.random() * 0xffffffff) >>> 0), length, night, map, difficulty };
   }
 
   get stageParams(): StageParams {

@@ -5,6 +5,7 @@ import { ROAD_HALF_WIDTH, ROAD_SAMPLE_SPACING, STAGE_LENGTHS } from '../constant
 import { clamp, wrapAngle } from '../math';
 import { Noise2D, Rng, hash2 } from '../rng';
 import type { Checkpoint, HayBale, Jump, Puddle, StageData, StageParams } from '../types';
+import { DIFFICULTIES, difficultyOf } from '../difficulty';
 import { placeAnimals } from './animals';
 import { analyseCorners } from './pacenotes';
 import { createTerrainBase, type HeightFn } from './terrainBase';
@@ -136,7 +137,7 @@ function straightProfile(len: number): number[] {
   return new Array(Math.max(1, Math.round(len))).fill(0);
 }
 
-function buildPath(seed: number, target: number): PathBuilder {
+function buildPath(seed: number, target: number, weights: Record<SegmentKind, number> = SEGMENT_WEIGHTS): PathBuilder {
   for (let attempt = 0; attempt < 40; attempt++) {
     const rng = new Rng(hash2(seed, attempt));
     const path = new PathBuilder();
@@ -148,7 +149,7 @@ function buildPath(seed: number, target: number): PathBuilder {
       pref = clamp(pref + rng.range(-0.25, 0.25), -1.0, 1.0);
       const heading = path.hs[path.hs.length - 1];
       const dev = wrapAngle(heading - pref);
-      let kind = rng.weighted(SEGMENT_WEIGHTS);
+      let kind = rng.weighted(weights);
       if (kind === 'hairpin' && (Math.abs(dev) > 0.8 || lastWasHairpin)) kind = 'hard';
       // choose turn direction: forced back towards the preferred heading when far off
       const towards = dev > 0 ? -1 : 1;
@@ -320,8 +321,11 @@ export function generateStage(params: StageParams): StageData {
   const seed = params.seed >>> 0;
   const target = STAGE_LENGTHS[params.length] ?? STAGE_LENGTHS.medium;
   const mountain = params.map === 'mountain';
+  const diff = difficultyOf(params);
+  const [wS, wK, wE, wM, wH, wP, wC] = diff.segments;
+  const weights: Record<SegmentKind, number> = { straight: wS, keep: wK, easy: wE, medium: wM, hard: wH, hairpin: wP, chicane: wC };
   const base = createTerrainBase({ seed, length: params.length, map: mountain ? 'mountain' : 'countryside' });
-  const path = (mountain && buildMountainPath(seed, target, base)) || buildPath(seed, target);
+  const path = (mountain && buildMountainPath(seed, target, base)) || buildPath(seed, target, weights);
   const rng = new Rng(hash2(seed, 0xbeef));
 
   // --- resample to ROAD_SAMPLE_SPACING ---------------------------------------
@@ -422,7 +426,7 @@ export function generateStage(params: StageParams): StageData {
   // The driver crests the rise and only then sees the road bend away.
   for (const c of corners) {
     if (mountain) break; // mountain corners are blind because of the rock and terrain instead
-    const p = c.severity === 'hard' || c.severity === 'hairpin' ? 0.45 : c.severity === 'medium' ? 0.25 : 0;
+    const p = Math.min(0.9, (c.severity === 'hard' || c.severity === 'hairpin' ? 0.45 : c.severity === 'medium' ? 0.25 : 0) * diff.crests);
     if (!rng.chance(p)) continue;
     const centre = c.entryIdx - rng.int(10, 16);
     const half = 11; // samples (22 m) each side
@@ -434,7 +438,7 @@ export function generateStage(params: StageParams): StageData {
 
   // --- puddles ---------------------------------------------------------------
   const puddles: Puddle[] = [];
-  const wantPuddles = mountain ? (params.length === 'long' ? 3 : 2) : params.length === 'short' ? 3 : params.length === 'medium' ? 5 : 8;
+  const wantPuddles = Math.round((mountain ? (params.length === 'long' ? 3 : 2) : params.length === 'short' ? 3 : params.length === 'medium' ? 5 : 8) * diff.puddles);
   for (let tries = 0; tries < 80 && puddles.length < wantPuddles; tries++) {
     const i = rng.int(40, finishIdx - 20);
     if (nearCheckpoint(i, 8) || jumps.some((j) => Math.abs(j.idx - i) < 14)) continue;
@@ -471,7 +475,7 @@ export function generateStage(params: StageParams): StageData {
   }
 
   // --- road width and exposure (mountain) ------------------------------------------
-  const halfWidths = new Float64Array(count).fill(ROAD_HALF_WIDTH);
+  const halfWidths = new Float64Array(count).fill(ROAD_HALF_WIDTH * diff.roadWidth);
   const exposure = new Float64Array(count);
   if (mountain) {
     const wn = new Noise2D(hash2(seed, 4242));
@@ -490,8 +494,8 @@ export function generateStage(params: StageParams): StageData {
         w = Math.max(w, ROAD_HALF_WIDTH);
         e = Math.min(e, 0.3);
       }
-      halfWidths[i] = w;
-      exposure[i] = e;
+      halfWidths[i] = w * diff.roadWidthMountain;
+      exposure[i] = Math.min(1, e + diff.exposure);
     }
     const hw = boxSmooth(halfWidths, 6, 2);
     const ex = boxSmooth(exposure, 4, 1);
@@ -500,7 +504,7 @@ export function generateStage(params: StageParams): StageData {
   }
 
   // --- livestock and farm traffic (own random stream) -------------------------------
-  const animals = placeAnimals(params, { xs, zs, headings, curvature, count, startIdx, finishIdx, corners, jumps, checkpoints });
+  const animals = placeAnimals(params, { xs, zs, headings, curvature, count, startIdx, finishIdx, corners, jumps, checkpoints }, diff.animals);
 
   // --- bounds & hash -------------------------------------------------------------
   let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
@@ -519,9 +523,11 @@ export function generateStage(params: StageParams): StageData {
   hash = hash2(hash, corners.length * 1000 + jumps.length * 100 + puddles.length * 10 + checkpoints.length);
   hash = hash2(hash, params.night ? 0x4e1 : 0xda7);
   hash = hash2(hash, mountain ? 0x3170 : 0xc0);
+  // (standard keeps the classic checksums)
+  if (params.difficulty && params.difficulty !== 'standard') hash = hash2(hash, 0xd1f0 + DIFFICULTIES.indexOf(params.difficulty));
 
   return {
-    params: { seed, length: params.length, night: !!params.night, map: mountain ? 'mountain' : 'countryside' },
+    params: { seed, length: params.length, night: !!params.night, map: mountain ? 'mountain' : 'countryside', difficulty: params.difficulty ?? 'standard' },
     xs,
     ys,
     zs,

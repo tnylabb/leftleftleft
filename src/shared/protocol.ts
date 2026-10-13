@@ -2,6 +2,8 @@
 
 import type { StageLength } from './constants';
 import type { PlayerStyle } from './style';
+import type { Difficulty } from './difficulty';
+import type { RoomMode, Standings } from './modes';
 import type {
   CalloutId,
   CalloutMsg,
@@ -53,6 +55,10 @@ export interface ServerToClientEvents {
   'game:paused': (payload: { paused: boolean; reason: string }) => void;
   'race:event': (event: RaceEvent) => void;
   'race:stats': (stats: RaceStats) => void;
+  /** Versus: live positions (2 Hz) and the final classification. */
+  'race:standings': (s: Standings) => void;
+  /** Versus: another crew's car (their validated car state, ~15 Hz). */
+  'race:car': (payload: { team: number; buf: ArrayBuffer }) => void;
   'car:state': (buf: ArrayBuffer) => void;
   'car:teleport': (pose: Pose) => void;
   'car:correction': (buf: ArrayBuffer) => void;
@@ -72,13 +78,15 @@ export interface ServerToClientEvents {
 }
 
 export interface ClientToServerEvents {
-  'room:create': (payload: { name: string }, ack: (res: JoinAck) => void) => void;
-  'room:join': (payload: { code: string; name: string; playerId?: string; token?: string }, ack: (res: JoinAck) => void) => void;
+  'room:create': (payload: { name: string; profileCode?: string }, ack: (res: JoinAck) => void) => void;
+  'room:join': (payload: { code: string; name: string; playerId?: string; token?: string; profileCode?: string }, ack: (res: JoinAck) => void) => void;
   'room:leave': () => void;
   'lobby:role': (payload: { role: Role | null }) => void;
   'lobby:ready': (payload: { ready: boolean }) => void;
   'lobby:style': (payload: { style: PlayerStyle }) => void;
-  'lobby:stage': (payload: { length: StageLength; seed?: number; night?: boolean; map?: StageMap }) => void;
+  'lobby:mode': (payload: { mode: RoomMode }) => void;
+  'lobby:team': (payload: { team: number }) => void;
+  'lobby:stage': (payload: { length: StageLength; seed?: number; night?: boolean; map?: StageMap; difficulty?: Difficulty }) => void;
   'game:loaded': (payload: { hash: number }) => void;
   'game:restart': (payload: { mode: 'retry' | 'new' }) => void;
   'game:toLobby': () => void;

@@ -76,7 +76,8 @@ export class CarModel {
   private decals: THREE.Material[] = [];
   private textures: THREE.Texture[] = [];
 
-  constructor(livery: LiveryLook = LIVERIES[0]) {
+  /** `lights`: real headlight spot lights (only the player's own car needs them). */
+  constructor(livery: LiveryLook = LIVERIES[0], opts: { lights?: boolean } = {}) {
     this.root.name = 'car';
     this.livery = livery;
     const paint = livery.body;
@@ -278,7 +279,7 @@ export class CarModel {
 
     // headlights + rally spot lights (always present so the light count is fixed;
     // switched on for night stages)
-    for (const [x, angle, reach] of [[-0.48, 0.42, 70], [0.48, 0.42, 70], [0, 0.22, 110]] as const) {
+    for (const [x, angle, reach] of opts.lights === false ? [] : ([[-0.48, 0.42, 70], [0.48, 0.42, 70], [0, 0.22, 110]] as const)) {
       const l = new THREE.SpotLight(0xfff2d8, 0, reach, angle, 0.55, 1.15);
       l.position.set(x, 0.1, -1.98);
       l.target.position.set(x * 1.4, -1.6, -24);

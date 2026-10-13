@@ -1,5 +1,5 @@
 // Headless physics smoke test: builds a stage's colliders and lets a simple
-// autopilot drive the hatchback along the road. Run: npx tsx scripts/sim-test.ts [seed] [countryside|mountain]
+// autopilot drive the hatchback along the road. Run: npx tsx scripts/sim-test.ts [seed] [countryside|mountain] [standard|hard|expert]
 // Verifies the car drives, steers, stays on its wheels and reaches checkpoints.
 
 import RAPIER from '@dimforge/rapier3d-compat';
@@ -8,6 +8,7 @@ import { FIXED_DT, ROAD_SAMPLE_SPACING } from '../src/shared/constants';
 import { RaceTracker } from '../src/shared/race/RaceTracker';
 import { generateStage, stageStartPose } from '../src/shared/stage/StageGenerator';
 import { VehicleController } from '../src/vehicle/VehicleController';
+import { difficultyOf, isDifficulty } from '../src/shared/difficulty';
 import { Road } from '../src/world/Road';
 import { Terrain } from '../src/world/Terrain';
 import { TerrainField } from '../src/world/TerrainField';
@@ -16,8 +17,9 @@ import { Vegetation } from '../src/world/Vegetation';
 await RAPIER.init();
 const seed = Number(process.argv[2] ?? 42);
 const map = process.argv[3] === 'mountain' ? 'mountain' : 'countryside';
-const stage = generateStage({ seed, length: 'short', night: false, map });
-console.log(`${map} stage, seed ${seed}: ${stage.totalLength.toFixed(0)} m, ${stage.corners.length} corners`);
+const difficulty = isDifficulty(process.argv[4]) ? process.argv[4] : 'standard';
+const stage = generateStage({ seed, length: 'short', night: false, map, difficulty });
+console.log(`${map} ${difficulty} stage, seed ${seed}: ${stage.totalLength.toFixed(0)} m, ${stage.corners.length} corners`);
 const physics = new PhysicsWorld();
 const field = new TerrainField(stage);
 const t0 = performance.now();
@@ -29,6 +31,7 @@ await veg.build();
 console.log(`world built in ${(performance.now() - t0).toFixed(0)} ms, colliders: ${physics.world.colliders.len()}`);
 
 const car = new VehicleController(physics, stageStartPose(stage), road.puddleAt);
+car.assist = difficultyOf(stage.params).handling;
 const tracker = new RaceTracker(stage);
 let time = 0;
 let maxSpeed = 0;

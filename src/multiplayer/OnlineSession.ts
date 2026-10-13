@@ -6,6 +6,8 @@ import type { StageLength } from '../shared/constants';
 import type { ClientToServerEvents, ImpactReport, JoinAck, MudReport, ServerToClientEvents } from '../shared/protocol';
 import { readFloat32, toArrayBuffer } from '../shared/snapshot';
 import type { PlayerStyle } from '../shared/style';
+import type { Difficulty } from '../shared/difficulty';
+import { MODE_SPEC, type RoomMode } from '../shared/modes';
 import type { CalloutId, DoorSide, Role, RoomSnapshot, StageMap, StageParams } from '../shared/types';
 import { GameSession, type ConnectionStatus } from './Session';
 
@@ -31,6 +33,18 @@ export class OnlineSession extends GameSession {
   private name = 'Player';
   /** Our look, sent to the room after every create / join / rejoin. */
   style: PlayerStyle | null = null;
+  /** Recovery code of our protected stats profile (sent when joining). */
+  profileCode: string | null = null;
+
+  /** Our car / crew number in the current room. */
+  get myTeam(): number | null {
+    return this.room?.players.find((p) => p.id === this.playerId)?.team ?? null;
+  }
+
+  /** This room's crews have no human navigator: we run the AI navigator. */
+  get aiNavigator(): boolean {
+    return !!this.room && MODE_SPEC[this.room.mode].crew === 1;
+  }
 
   constructor(url?: string) {
     super();
@@ -109,6 +123,11 @@ export class OnlineSession extends GameSession {
     s.on('game:paused', (p) => this.emit('paused', p));
     s.on('race:event', (e) => this.emit('raceEvent', e));
     s.on('race:stats', (st) => this.emit('stats', st));
+    s.on('race:standings', (st) => this.emit('standings', st));
+    s.on('race:car', (p) => {
+      const f = readFloat32(p?.buf);
+      if (f && Number.isInteger(p.team)) this.emit('opponentCar', { team: p.team, buf: f });
+    });
     s.on('car:state', (buf) => {
       const f = readFloat32(buf);
       if (f) this.emit('carState', f);
@@ -230,14 +249,14 @@ export class OnlineSession extends GameSession {
   async createRoom(name: string): Promise<JoinAck> {
     this.name = name;
     await this.waitForConnection();
-    return this.ackCall('room:create', { name });
+    return this.ackCall('room:create', { name, ...(this.profileCode ? { profileCode: this.profileCode } : {}) });
   }
 
   async joinRoom(code: string, name: string): Promise<JoinAck> {
     this.name = name;
     await this.waitForConnection();
     const seat = this.seat && this.seat.code === code.toUpperCase() ? this.seat : null;
-    return this.ackCall('room:join', { code, name, playerId: seat?.playerId, token: seat?.token });
+    return this.ackCall('room:join', { code, name, playerId: seat?.playerId, token: seat?.token, ...(this.profileCode ? { profileCode: this.profileCode } : {}) });
   }
 
   async rejoin(): Promise<JoinAck> {
@@ -254,12 +273,18 @@ export class OnlineSession extends GameSession {
   setReady(ready: boolean) {
     this.socket.emit('lobby:ready', { ready });
   }
+  setMode(mode: RoomMode) {
+    this.socket.emit('lobby:mode', { mode });
+  }
+  setTeam(team: number) {
+    this.socket.emit('lobby:team', { team });
+  }
   setStyle(style: PlayerStyle) {
     this.style = style;
     if (this.socket.connected) this.socket.emit('lobby:style', { style });
   }
-  setStage(length: StageLength, seed?: number, night?: boolean, map?: StageMap) {
-    this.socket.emit('lobby:stage', { length, seed, night, map });
+  setStage(length: StageLength, seed?: number, night?: boolean, map?: StageMap, difficulty?: Difficulty) {
+    this.socket.emit('lobby:stage', { length, seed, night, map, difficulty });
   }
 
   // --- gameplay ---------------------------------------------------------------

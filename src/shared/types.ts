@@ -1,5 +1,7 @@
 import type { StageLength } from './constants';
+import type { Difficulty } from './difficulty';
 import type { PlayerStyle } from './style';
+import type { RoomMode } from './modes';
 
 export type Role = 'driver' | 'navigator';
 export type DoorSide = 'left' | 'right';
@@ -16,6 +18,8 @@ export interface StageParams {
   /** Night stage: dark, headlights, the tablet needs the head lamp to be read. */
   night: boolean;
   map: StageMap;
+  /** Shared difficulty code (RALLY_STANDARD when absent). */
+  difficulty?: Difficulty;
 }
 
 export type CornerSeverity = 'keep' | 'easy' | 'medium' | 'hard' | 'hairpin';
@@ -123,6 +127,8 @@ export interface RaceStats {
 }
 
 export interface RaceResults extends RaceStats {
+  /** Didn't finish (versus: timed out after the winner, or the crew left). */
+  dnf?: boolean;
   finalTimeMs: number;
   avgSpeed: number;
   stageLength: number;
@@ -217,10 +223,13 @@ export interface PlayerInfo {
   isHost: boolean;
   /** Helmet, suit, face and the livery they'd paint the car in. */
   style: PlayerStyle;
+  /** Car / crew number (null = no seat in this mode yet). */
+  team: number | null;
 }
 
 export interface RoomSnapshot {
   code: string;
+  mode: RoomMode;
   phase: RoomPhase;
   players: PlayerInfo[];
   stage: StageParams;

@@ -188,7 +188,7 @@ export class Props {
   private addLine(idx: number) {
     const s = this.stage;
     const h = s.headings[idx];
-    const line = new THREE.Mesh(new THREE.PlaneGeometry(HW * 2, 0.45), lambert(0xf0eee6));
+    const line = new THREE.Mesh(new THREE.PlaneGeometry(s.halfWidths[idx] * 2, 0.45), lambert(0xf0eee6));
     line.rotation.order = 'YXZ';
     line.rotation.set(-Math.PI / 2, -h, 0);
     line.position.set(s.xs[idx], this.road.surfaceY(idx, 0) + 0.06, s.zs[idx]);

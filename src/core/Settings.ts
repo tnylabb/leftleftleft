@@ -8,6 +8,8 @@ export interface SettingsData {
   name: string;
   /** Your look (helmet.suit.skin.face.livery), see shared/style. */
   style: string;
+  /** Background music volume (menu / lobby and on the stage). */
+  musicVolume: number;
   masterVolume: number;
   engineVolume: number;
   environmentVolume: number;
@@ -30,6 +32,7 @@ export interface SettingsData {
 const DEFAULTS: SettingsData = {
   name: '',
   style: '',
+  musicVolume: 0.35,
   masterVolume: 0.8,
   engineVolume: 0.8,
   environmentVolume: 0.7,

@@ -27,7 +27,7 @@ export const CAR_SPEC = {
   antiRollFront: 9500,
   antiRollRear: 7000,
   maxSteerLow: 0.6,
-  maxSteerHigh: 0.12,
+  maxSteerHigh: 0.1,
   steerSpeedIn: 2.5,
   steerSpeedOut: 4.0,
   /** Extra steering lock: +steerBoostTop at top speed, +steerBoostLow more at a standstill. */
@@ -56,7 +56,7 @@ export const CAR_SPEC = {
 export type SurfaceKind = 'road' | 'grass' | 'mud';
 
 export const SURFACE_GRIP: Record<SurfaceKind, { mu: number; slide: number; drag: number }> = {
-  road: { mu: 1.06, slide: 0.72, drag: 0 }, // loose gravel
-  grass: { mu: 0.78, slide: 0.66, drag: 120 },
+  road: { mu: 1.2, slide: 0.84, drag: 0 }, // loose gravel: grippy until you overdo it
+  grass: { mu: 0.9, slide: 0.74, drag: 120 },
   mud: { mu: 0.5, slide: 0.55, drag: 900 },
 };

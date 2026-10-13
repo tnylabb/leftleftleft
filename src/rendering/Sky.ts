@@ -21,12 +21,15 @@ export class Sky {
     shadowMapSize: number,
     readonly night = false,
     readonly mountain = false,
+    /** Sight distance multiplier (harder difficulties: thicker fog). */
+    sight = 1,
   ) {
     this.fogColor = (night ? NIGHT_FOG : mountain ? MOUNTAIN_HAZE : FOG_COLOR).clone();
     scene.background = this.fogColor.clone();
     // less forward visibility than before; at night the headlights are what you get.
     // Mountain air: haze that fades the valley below and the far peaks
-    scene.fog = night ? new THREE.Fog(this.fogColor.clone(), 18, 230) : mountain ? new THREE.Fog(this.fogColor.clone(), 45, 470) : new THREE.Fog(this.fogColor.clone(), 60, 380);
+    const [near, far] = night ? [18, 230] : mountain ? [45, 470] : [60, 380];
+    scene.fog = new THREE.Fog(this.fogColor.clone(), near * sight, far * sight);
 
     this.hemi = night ? new THREE.HemisphereLight(0x3d4f7a, 0x12120e, 0.42) : new THREE.HemisphereLight(0xdff1ff, 0x7a7158, 1.35);
     this.group.add(this.hemi);

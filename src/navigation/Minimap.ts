@@ -6,6 +6,7 @@ import { canvasTexture } from '../rendering/materials';
 import type { NavInstruction } from '../shared/stage/pacenotes';
 import type { CornerSeverity, StageData } from '../shared/types';
 import type { AnimalMarker } from '../world/Animals';
+import { difficultyOf } from '../shared/difficulty';
 
 const W = 512;
 const H = 384;
@@ -27,6 +28,8 @@ export interface MinimapState {
   now: number;
   /** Livestock / tractors (live positions). */
   animals?: AnimalMarker[];
+  /** Versus: the other crews' cars. */
+  rivals?: { team: number; x: number; z: number; color: string }[];
 }
 
 export const SEVERITY_COLOR: Record<CornerSeverity, string> = {
@@ -207,7 +210,7 @@ export class Minimap {
     g.strokeStyle = '#5c5446';
     g.lineWidth = 10 / ppm;
     g.stroke();
-    const ahead = Math.min(st.finishIdx, idx + 380);
+    const ahead = Math.min(st.finishIdx, idx + difficultyOf(st.params).tabletAhead);
     path(idx, ahead);
     g.strokeStyle = '#ffb347';
     g.lineWidth = 4.5 / ppm;
@@ -298,6 +301,19 @@ export class Minimap {
         g.stroke();
       }
       drawAnimalIcon(g, p[0], p[1], an.kind);
+    }
+
+    // the other crews (versus): a dot in their colour
+    for (const r of s.rivals ?? []) {
+      const p = toScreen(r.x, r.z);
+      if (!onScreen(p)) continue;
+      g.fillStyle = r.color;
+      g.strokeStyle = '#fff';
+      g.lineWidth = 2;
+      g.beginPath();
+      g.arc(p[0], p[1], 7, 0, Math.PI * 2);
+      g.fill();
+      g.stroke();
     }
 
     // the car

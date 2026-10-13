@@ -3,6 +3,7 @@
 
 import { EventBus } from '../core/EventBus';
 import type { ImpactReport, MudReport } from '../shared/protocol';
+import type { Standings } from '../shared/modes';
 import type {
   CalloutId,
   CalloutMsg,
@@ -47,6 +48,10 @@ export interface SessionEvents {
   room: RoomSnapshot;
   connection: ConnectionStatus;
   kicked: string;
+  /** Versus: live / final positions. */
+  standings: Standings;
+  /** Versus: another crew's car state. */
+  opponentCar: { team: number; buf: Float32Array };
 }
 
 export abstract class GameSession extends EventBus<SessionEvents> {

@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import type { PhysicsWorld, Surface } from '../physics/PhysicsWorld';
 import { clamp, lerp } from '../shared/math';
 import type { ImpactFx, Pose } from '../shared/types';
+import { NO_ASSIST, type DrivingAssist } from './assists';
 import { CAR_SPEC, SURFACE_GRIP, type SurfaceKind } from './carSpec';
 import { Drivetrain } from './Drivetrain';
 
@@ -89,6 +90,8 @@ export class VehicleController {
   /** World-space forces from players pulling on the tow hooks; refilled by the game every step. */
   readonly externalForces: { point: THREE.Vector3; force: THREE.Vector3 }[] = [];
   puddleHit = -1;
+  /** Driving help from the stage difficulty (none by default). */
+  assist: DrivingAssist = NO_ASSIST;
 
   readonly prevPos = new THREE.Vector3();
   readonly prevQuat = new THREE.Quaternion();
@@ -214,10 +217,11 @@ export class VehicleController {
 
     // --- steering (speed sensitive, rate limited) -------------------------------
     const auth = clamp(input.steerAuthority, 0.2, 1);
-    const sf = Math.pow(clamp(Math.abs(speedFwd) / 36, 0, 1), 0.8);
+    const sf = Math.pow(clamp(Math.abs(speedFwd) / 34, 0, 1), 0.65);
     // a little more lock at low / medium speed, barely more flat out
     const boost = 1 + s.steerBoostTop + s.steerBoostLow * (1 - sf);
-    const maxSteer = lerp(s.maxSteerLow, s.maxSteerHigh, sf) * boost * auth;
+    const a = this.assist;
+    const maxSteer = lerp(s.maxSteerLow, s.maxSteerHigh, sf) * boost * auth * lerp(1, a.steerHigh, sf);
     const target = this.frozen ? input.steer * s.maxSteerLow : input.steer * maxSteer;
     const towardsCentre = Math.abs(target) < Math.abs(this.steerAngle) || Math.sign(target) !== Math.sign(this.steerAngle);
     const rate = (towardsCentre ? s.steerSpeedOut : s.steerSpeedIn) * (0.55 + 0.45 * auth);
@@ -231,6 +235,8 @@ export class VehicleController {
     let driveForce = this.drivetrain.update(dt, dtIn, speedFwd, slipping);
     let brake = this.drivetrain.brake;
     this.handbrake = input.handbrake;
+    // easy: no more pace than the driver can handle blind
+    if (speedFwd > a.topSpeed && driveForce > 0) driveForce *= clamp(1 - (speedFwd - a.topSpeed) / 2, 0, 1);
     if (this.frozen) {
       driveForce = 0;
       brake = 1;
@@ -325,7 +331,8 @@ export class VehicleController {
 
       const grip = SURFACE_GRIP[w.surface];
       const N = Math.min(w.load, 9000);
-      const mu = grip.mu * (ws.front ? 1.0 : 0.96);
+      // the rear grips a little more than the front: a slight understeer bias instead of snap oversteer
+      const mu = grip.mu * (ws.front ? 1.0 : 1.06) * a.grip;
       const maxF = mu * N;
       surf += w.surface === 'road' ? 0 : w.surface === 'grass' ? 1 : 2;
 
@@ -336,8 +343,9 @@ export class VehicleController {
       if (!locked) fLong += driveForce * (ws.front ? s.frontDriveSplit : 1 - s.frontDriveSplit) * 0.5;
       const cancel = (Math.abs(vLong) * cornerMass) / dt;
       if (brake > 0) {
-        const bf = brake * (ws.front ? s.brakeFront : s.brakeRear);
-        fLong -= Math.sign(vLong) * Math.min(bf, cancel);
+        const bf = brake * (ws.front ? s.brakeFront : s.brakeRear) * a.brake;
+        // ABS: leave part of the grip for steering
+        fLong -= Math.sign(vLong) * Math.min(bf, cancel, a.abs > 0 ? a.abs * maxF : Infinity);
       }
       if (locked) fLong -= Math.sign(vLong) * Math.min(maxF * 0.85, cancel);
       // rolling resistance (nearly constant) + surface drag (grass, mud)
@@ -352,7 +360,7 @@ export class VehicleController {
 
       // lateral
       const slipAngle = Math.atan2(vLat, Math.max(Math.abs(vLong), 2.6));
-      const peak = ws.front ? 0.135 : 0.115;
+      const peak = ws.front ? 0.135 : 0.15;
       let latMu = mu * (locked ? 0.42 : 1) * (w.spinning ? 0.7 : 1);
       if (this.frozen) latMu = mu * 2;
       let fLat = -tyreCurve(slipAngle, peak, grip.slide) * latMu * N;
@@ -393,7 +401,7 @@ export class VehicleController {
     if (!this.frozen && (this.wheels[0].grounded || this.wheels[1].grounded) && Math.abs(speedFwd) > 1) {
       const fade = 1 - clamp((Math.abs(speedFwd) - 14) / 18, 0, 1);
       if (fade > 0) {
-        const want = (-speedFwd * Math.tan(this.steerAngle)) / s.wheelbase;
+        const want = this.reachableYawRate(speedFwd);
         const yawRate = _w.dot(_up);
         const err = want - yawRate;
         if (Math.sign(err) === Math.sign(want) && Math.abs(yawRate) < Math.abs(want)) {
@@ -402,6 +410,25 @@ export class VehicleController {
           b.applyTorqueImpulse(_f, true);
         }
       }
+    }
+
+    // stability control (NORMAL / EASY): when the tail steps out further than the
+    // steering asks for, a counter-yaw torque and some damping of the sideways
+    // slide bring the car back in line. Off while the handbrake is pulled, so
+    // handbrake turns still work.
+    if (a.stability > 0 && !this.frozen && !this.handbrake && groundedCount >= 3 && Math.abs(speedFwd) > 4) {
+      const want = this.reachableYawRate(speedFwd);
+      const yawRate = _w.dot(_up);
+      const excess = yawRate - want;
+      if (Math.abs(yawRate) > Math.abs(want) + 0.12 || Math.sign(yawRate) !== Math.sign(want)) {
+        const cap = 7000 * a.stability;
+        _f.copy(_up).multiplyScalar(clamp(-excess * 5200 * a.stability, -cap, cap) * dt);
+        b.applyTorqueImpulse(_f, true);
+      }
+      const vSide = _v.dot(_right);
+      const sideCap = 5200 * a.stability;
+      _f.copy(_right).multiplyScalar(clamp(-vSide * s.mass * 0.9 * a.stability, -sideCap, sideCap) * dt);
+      b.applyImpulse(_f, true);
     }
 
     // --- air behaviour ------------------------------------------------------------------
@@ -414,6 +441,16 @@ export class VehicleController {
       _f.y = _w.y;
       b.setAngvel(_f, true);
     }
+  }
+
+  /**
+   * The yaw rate the steering asks for, capped at what the tyres can actually
+   * deliver (lateral grip / speed). Asking for more than that is what spins a car.
+   */
+  private reachableYawRate(speedFwd: number): number {
+    const geometric = (-speedFwd * Math.tan(this.steerAngle)) / CAR_SPEC.wheelbase;
+    const limit = (9.81 * 1.1 * this.assist.grip) / Math.max(Math.abs(speedFwd), 3);
+    return clamp(geometric, -limit, limit);
   }
 
   /** Collects collision impacts / landings and updates acceleration. Call after the world step. */

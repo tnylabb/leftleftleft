@@ -3,6 +3,8 @@ import type { CalloutId } from '../../src/shared/types';
 import type { Room, GameSocket, PlayerSlot } from '../rooms/Room';
 import type { GameServer, RoomManager } from '../rooms/RoomManager';
 import { sanitizeStyle } from '../../src/shared/style';
+import { isDifficulty } from '../../src/shared/difficulty';
+import { isRoomMode, MAX_ROOM_PLAYERS } from '../../src/shared/modes';
 import {
   RateLimiter,
   finite,
@@ -15,6 +17,13 @@ import {
   normalizeCode,
   sanitizeName,
 } from '../validation/payloads';
+
+/** Optional stats-profile recovery code sent when joining (validated by the stats store). */
+function profileCodeOf(payload: unknown): string | null {
+  if (!isObject(payload) || typeof payload.profileCode !== 'string') return null;
+  const c = payload.profileCode.trim().toUpperCase();
+  return /^[A-Z0-9-]{6,32}$/.test(c) ? c : null;
+}
 
 export function registerHandlers(io: GameServer, rooms: RoomManager) {
   io.on('connection', (socket: GameSocket) => {
@@ -48,7 +57,7 @@ export function registerHandlers(io: GameServer, rooms: RoomManager) {
       if (!limiter.allow('join', 2, 5)) return ack({ ok: false, error: 'Too many requests' });
       leaveCurrent();
       const room = rooms.create();
-      const slot = room.addPlayer(sanitizeName(isObject(payload) ? payload.name : ''));
+      const slot = room.addPlayer(sanitizeName(isObject(payload) ? payload.name : ''), profileCodeOf(payload));
       if (!slot) return ack({ ok: false, error: 'Could not create room' });
       room.attach(slot, socket);
       ack({ ok: true, code: room.code, playerId: slot.id, token: slot.token, room: room.snapshot() });
@@ -76,8 +85,8 @@ export function registerHandlers(io: GameServer, rooms: RoomManager) {
       }
       if (room.phase !== 'lobby') return ack({ ok: false, error: 'That stage is already running' });
       leaveCurrent();
-      const slot = room.addPlayer(sanitizeName(payload.name));
-      if (!slot) return ack({ ok: false, error: 'Room is full (2 players max)' });
+      const slot = room.addPlayer(sanitizeName(payload.name), profileCodeOf(payload));
+      if (!slot) return ack({ ok: false, error: `Room is full (${MAX_ROOM_PLAYERS} players max)` });
       room.attach(slot, socket);
       ack({ ok: true, code, playerId: slot.id, token: slot.token, room: room.snapshot() });
     });
@@ -89,6 +98,16 @@ export function registerHandlers(io: GameServer, rooms: RoomManager) {
       if (!c || !isObject(payload)) return;
       if (payload.role !== null && !isRole(payload.role)) return;
       c.room.setRole(c.slot, payload.role);
+    });
+
+    socket.on('lobby:mode', (payload) => {
+      const c = ctx();
+      if (c && isObject(payload) && isRoomMode(payload.mode)) c.room.setMode(c.slot, payload.mode);
+    });
+
+    socket.on('lobby:team', (payload) => {
+      const c = ctx();
+      if (c && isObject(payload) && finite(payload.team)) c.room.setTeam(c.slot, payload.team);
     });
 
     socket.on('lobby:style', (payload) => {
@@ -112,6 +131,7 @@ export function registerHandlers(io: GameServer, rooms: RoomManager) {
         finite(payload.seed) ? payload.seed : undefined,
         typeof payload.night === 'boolean' ? payload.night : undefined,
         isStageMap(payload.map) ? payload.map : undefined,
+        isDifficulty(payload.difficulty) ? payload.difficulty : undefined,
       );
     });
 
