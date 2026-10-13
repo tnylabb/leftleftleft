@@ -6,7 +6,7 @@ import type { Settings, SettingsData } from '../core/Settings';
 import { GAME_TAGLINE, type StageLength } from '../shared/constants';
 import { FACES, HELMETS, LIVERIES, SKINS, SUITS, type PlayerStyle } from '../shared/style';
 import { DIFFICULTIES, DIFFICULTY, type Difficulty } from '../shared/difficulty';
-import { MODE_SPEC, ROOM_MODES, TEAM_COLORS, TEAM_NAMES, type RoomMode, type Standings } from '../shared/modes';
+import { MODE_SPEC, modesFor, TEAM_COLORS, TEAM_NAMES, type RoomMode, type Standings } from '../shared/modes';
 import type { RaceResults, Role, RoomSnapshot, StageMap } from '../shared/types';
 import type { ConnectionStatus } from '../multiplayer/Session';
 import type { VoiceState } from '../multiplayer/VoiceChat';
@@ -301,8 +301,9 @@ export class UI {
             <div class="chip"><span class="status-dot ${status}"></span>${status}</div>
           </div>
           <div class="section-label">MODE${host ? '' : ' <span class="muted small">(host decides)</span>'} <span class="muted small">${room.players.length}/${spec.players} players</span></div>
-          <div class="seg wrap mode-seg">${ROOM_MODES.map(modeBtn).join('')}</div>
+          <div class="seg wrap mode-seg">${modesFor(room.players.length).map(modeBtn).join('')}</div>
           <div class="muted small">${esc(spec.blurb)}</div>
+          <div class="muted small more-modes">Other modes: ${[2, 3, 4].filter((n) => n !== Math.max(2, room.players.length)).map((n) => `${n} players - ${modesFor(n).map((m) => MODE_SPEC[m].label).join(', ')}`).join(' · ')}</div>
           <div class="section-label">${spec.teams > 1 ? 'CARS' : 'CREW'}</div>
           <div class="crews ${spec.teams > 2 ? 'many' : ''}">${crews}</div>
           ${waiting.length ? `<div class="section-label">WAITING <span class="muted small">no seat in this mode</span></div><div class="crew">${waiting.map(playerRow).join('')}</div>` : ''}

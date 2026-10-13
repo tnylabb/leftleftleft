@@ -37,6 +37,23 @@ export function isRoomMode(v: unknown): v is RoomMode {
   return typeof v === 'string' && (ROOM_MODES as string[]).includes(v);
 }
 
+/** Modes on offer for this many players in the room (1 = still waiting: the two-player modes). */
+export function modesFor(players: number): RoomMode[] {
+  const n = Math.max(2, Math.min(MAX_ROOM_PLAYERS, players));
+  return ROOM_MODES.filter((m) => MODE_SPEC[m].players === n);
+}
+
+/**
+ * The mode to switch to when the player count changes: the host's choice when it
+ * still fits, else the one closest to it (same crew size: co-op grows into 2v2,
+ * 1v1 into 1v1v1 and 1v1v1v1).
+ */
+export function fitMode(preferred: RoomMode, players: number): RoomMode {
+  const fits = modesFor(players);
+  if (fits.includes(preferred)) return preferred;
+  return fits.find((m) => MODE_SPEC[m].crew === MODE_SPEC[preferred].crew) ?? fits[0];
+}
+
 /** Team colours (name tags, standings, map markers). */
 export const TEAM_COLORS = ['#e8742b', '#3a7fd0', '#5cbf6b', '#d6c13a'];
 export const TEAM_NAMES = ['ORANGE', 'BLUE', 'GREEN', 'YELLOW'];

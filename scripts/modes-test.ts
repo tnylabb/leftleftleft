@@ -27,41 +27,53 @@ async function room(n: number, names: string[]) {
 
 // ------------------------------------------------------------------ lobby rules --
 {
-  const { ps, code } = await room(4, ['Host', 'Bea', 'Cid', 'Dot']);
+  // modes follow the number of players: co-op grows into 2v2, shrinks back to co-op
+  const host = await Player.make(url, 'Host');
+  const c = await host.create();
+  check(host.room?.mode === 'coop', 'a new room starts in co-op');
+  const others = await Promise.all(['Bea', 'Cid', 'Dot'].map((n) => Player.make(url, n)));
+  await others[0].join(c.code!);
+  await sleep(200);
+  check(host.room?.mode === 'coop', 'two players: still co-op');
+  await others[1].join(c.code!);
+  await sleep(200);
+  check(host.room?.mode === '1v1v1', `three players: the room switches to a three-player mode (${host.room?.mode})`);
+  await others[2].join(c.code!);
+  await sleep(250);
+  const ps = [host, ...others];
+  check(host.room?.mode === '2v2', `four players: co-op grows into 2v2 (${host.room?.mode})`);
   const fifth = await Player.make(url, 'Eve');
-  const full = await fifth.join(code);
+  const full = await fifth.join(c.code!);
   check(!full.ok && /4 players/.test(full.error ?? ''), `a fifth player is turned away ("${full.error}")`);
   fifth.close();
-  check(ps[0].room?.mode === 'coop', 'rooms start in co-op');
-  check(ps.filter((p) => p.me?.team === 0).length === 2 && ps.filter((p) => p.me?.team === null).length === 2, `co-op seats two, the others wait (${ps.map(seat).join(' ')})`);
-  ps[1].s.emit('lobby:mode', { mode: '2v2' });
+  ps[1].s.emit('lobby:mode', { mode: '1v1v1v1' });
   await sleep(150);
-  check(ps[0].room?.mode === 'coop', 'only the host can change the mode');
-  ps[0].s.emit('lobby:mode', { mode: '2v2' });
+  check(host.room?.mode === '2v2', 'only the host can change the mode');
+  host.s.emit('lobby:mode', { mode: '1v1' });
+  host.s.emit('lobby:mode', { mode: 'coop' });
   await sleep(200);
+  check(host.room?.mode === '2v2', 'the host cannot pick a mode made for another number of players');
   const teams = [0, 1].map((t) => ps.filter((p) => p.me?.team === t));
   check(teams[0].length === 2 && teams[1].length === 2, `2v2 makes two crews of two (${ps.map(seat).join(' ')})`);
   check(teams.every((t) => t.map((p) => p.me!.role).sort().join() === 'driver,navigator'), 'each crew gets a driver and a navigator');
-  // move a player: the full crew is refused
   const mover = teams[0][1];
   mover.s.emit('lobby:team', { team: 1 });
   await sleep(150);
   check(mover.me?.team === 0, 'cannot join a crew that is already full');
-  // readiness: 3 of 4 ready doesn't start
   for (const p of ps.slice(0, 3)) p.s.emit('lobby:ready', { ready: true });
   await sleep(200);
-  check(ps[0].room?.phase === 'lobby', 'three of four ready: still in the lobby');
-  ps[0].s.emit('lobby:mode', { mode: '1v1v1' });
+  check(host.room?.phase === 'lobby', 'three of four ready: still in the lobby');
+  host.s.emit('lobby:mode', { mode: '1v1v1v1' });
   await sleep(200);
-  check(ps.filter((p) => p.me?.team !== null).length === 3 && ps.every((p) => !p.me?.ready), `1v1v1 seats three drivers, readiness reset (${ps.map(seat).join(' ')})`);
-  check(ps.filter((p) => p.me?.team !== null).every((p) => p.me?.role === 'driver'), 'in 1v1v1 everybody seated drives');
-  ps[0].s.emit('lobby:mode', { mode: '1v1v1v1' });
-  await sleep(200);
-  check(new Set(ps.map((p) => p.me?.team)).size === 4, `1v1v1v1: four cars (${ps.map(seat).join(' ')})`);
-  // someone leaves the lobby: seats are re-dealt
+  check(host.room?.mode === '1v1v1v1' && new Set(ps.map((p) => p.me?.team)).size === 4 && ps.every((p) => !p.me?.ready), `1v1v1v1: four cars, readiness reset (${ps.map(seat).join(' ')})`);
+  // somebody leaves: the room drops to a mode for three, then (another leaves) for two
   ps[3].s.emit('room:leave');
-  await sleep(200);
-  check(ps[0].room!.players.length === 3, 'a player leaving the lobby is removed');
+  await sleep(250);
+  check(host.room!.players.length === 3 && host.room?.mode === '1v1v1', `one leaves: 1v1v1v1 becomes 1v1v1 (${host.room?.mode})`);
+  check(host.room!.players.every((p) => p.team !== null && p.role === 'driver'), 'in 1v1v1 everybody seated drives');
+  ps[2].s.emit('room:leave');
+  await sleep(250);
+  check(host.room!.players.length === 2 && host.room?.mode === '1v1', `another leaves: 1v1 (the host last picked a one-car-each mode) (${host.room?.mode})`);
   for (const p of ps) p.close();
 }
 
