@@ -408,3 +408,6 @@ label.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; 
 .protect.warn { border-color: var(--yellow); }
 .code-big { font-family: var(--font); font-size: 28px; letter-spacing: 3px; color: var(--yellow); }
 #in-profile-code { font-family: var(--font); letter-spacing: 2px; text-transform: uppercase; }
+
+/* lobby: two players picked the same role */
+.crew-clash { font-family: var(--font); font-size: 11px; color: var(--ink); background: var(--yellow); padding: 3px 8px; transform: skew(-8deg); align-self: flex-start; }

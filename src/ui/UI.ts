@@ -233,27 +233,35 @@ export class UI {
       const members = room.players.filter((p) => p.team === t).sort((x, y) => (x.role === 'driver' ? 0 : 1) - (y.role === 'driver' ? 0 : 1));
       const free = spec.crew - members.length;
       const title = spec.versus ? `${TEAM_NAMES[t]} CAR` : 'YOUR CAR';
+      const clash = spec.crew === 2 && members.length === 2 && members[0].role !== null && members[0].role === members[1].role;
       const join = room.mode === '2v2' && me && me.team !== t && free > 0 ? `<button class="btn small" data-action="team" data-team="${t}"><span>JOIN</span></button>` : '';
       return `<div class="crew-card" style="--team:${TEAM_COLORS[t]}">
           <div class="crew-head"><span>${title}</span>${join}</div>
           ${members.map(playerRow).join('')}
           ${Array.from({ length: Math.max(0, free) }, () => `<div class="crew-row empty"><span class="crew-name">Free seat</span><span class="small muted">share the room code</span></div>`).join('')}
           ${spec.crew === 1 ? '<div class="crew-ai">+ AI NAVIGATOR <span class="small muted">holds the tablet and reads the notes</span></div>' : ''}
+          ${clash ? `<div class="crew-clash">BOTH PICKED ${members[0].role!.toUpperCase()} - one of you switch to ${members[0].role === 'driver' ? 'NAVIGATOR' : 'DRIVER'}</div>` : ''}
         </div>`;
     }).join('');
     const waiting = room.players.filter((p) => p.team === null);
     const myCrew = me && me.team !== null ? room.players.filter((p) => p.team === me.team && p.id !== myId) : [];
-    const taken = (r: Role) => myCrew.some((p) => p.role === r);
+    const takenBy = (r: Role) => myCrew.find((p) => p.role === r)?.name ?? null;
     const icon = (r: Role) =>
       r === 'driver'
         ? '<svg viewBox="0 0 40 40" class="role-icon"><circle cx="20" cy="20" r="15" fill="none" stroke="currentColor" stroke-width="4"/><circle cx="20" cy="20" r="4" fill="currentColor"/><path d="M5 20h11M24 20h11M20 24v11" stroke="currentColor" stroke-width="4"/></svg>'
         : '<svg viewBox="0 0 40 40" class="role-icon"><rect x="6" y="9" width="28" height="22" rx="3" fill="none" stroke="currentColor" stroke-width="4"/><path d="M13 25l7-10 7 10" fill="none" stroke="currentColor" stroke-width="3"/></svg>';
     const roleBtn = (r: Role, title: string, sub: string) =>
-      `<button class="btn role-tile ${r} ${me?.role === r ? 'selected' : ''}" data-action="role" data-role="${r}" ${taken(r) ? 'disabled' : ''}><span>${icon(r)}<span class="role-text">${title}${taken(r) ? ' <span class="small">(taken)</span>' : ''}<span class="sub">${sub}</span></span></span></button>`;
+      `<button class="btn role-tile ${r} ${me?.role === r ? 'selected' : ''}" data-action="role" data-role="${r}"><span>${icon(r)}<span class="role-text">${title}${takenBy(r) ? ` <span class="small">(${esc(takenBy(r)!)} too)</span>` : ''}<span class="sub">${sub}</span></span></span></button>`;
     const len = (l: StageLength, label: string) =>
       `<button class="btn small ${room.stage.length === l ? 'selected' : ''}" data-action="stage" data-length="${l}" ${host ? '' : 'disabled'}><span>${label}</span></button>`;
     const modeBtn = (m: RoomMode) => `<button class="btn small ${room.mode === m ? 'selected' : ''}" data-action="mode" data-mode="${m}" title="${esc(MODE_SPEC[m].blurb)}" ${host ? '' : 'disabled'}><span>${MODE_SPEC[m].label}</span></button>`;
-    const ready = room.players.length === spec.players && seated.every((p) => p.role);
+    // every crew complete: a driver and (two-person crews) a navigator
+    const crewOk = (t: number) => {
+      const roles = room.players.filter((p) => p.team === t).map((p) => p.role);
+      return roles.includes('driver') && (spec.crew === 1 || roles.includes('navigator'));
+    };
+    const clashes = spec.crew === 2 && Array.from({ length: spec.teams }, (_, t) => t).some((t) => room.players.filter((p) => p.team === t).length === 2 && !crewOk(t));
+    const ready = room.players.length === spec.players && seated.every((p) => p.role) && Array.from({ length: spec.teams }, (_, t) => t).every(crewOk);
     const voiceHtml =
       voice && spec.crew === 2
         ? `<div class="voice-row"><span class="muted">Voice chat (your crew):</span>
@@ -272,8 +280,10 @@ export class UI {
         ? `${spec.label} needs ${spec.players} players - ${missing} more. Send them the room code; they choose JOIN WITH CODE.`
         : missing < 0
           ? `${spec.label} is for ${spec.players} players: ${-missing} of you have no seat. The host can pick another mode.`
-          : !ready
-            ? 'Pick your roles.'
+          : clashes
+            ? 'Two of you picked the same role - one of you switch (no need to leave).'
+            : !ready
+              ? 'Pick your roles.'
             : 'Everybody ready? Then go!');
     s.innerHTML = `
       <div class="lobby-layout">
