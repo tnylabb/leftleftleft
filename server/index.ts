@@ -44,7 +44,7 @@ try {
   stats = await StatsStore.open();
   console.log(`[left-left-left] stats database: ${stats.kind}${stats.kind === 'pglite' ? ' (local folder - set DATABASE_URL for a hosted Postgres)' : ''}`);
 } catch (err) {
-  console.error('[left-left-left] stats database unavailable - races are not recorded', err);
+  console.error('[left-left-left] stats database unavailable - races are not recorded:', err instanceof Error ? err.message : err);
 }
 const rooms = new RoomManager(io, GRACE_MS, (summary) => {
   stats
@@ -85,7 +85,7 @@ const apiLimited = (ip: string, perMinute: number) => {
 setInterval(() => apiHits.clear(), 10 * 60000).unref();
 const nameOf = (v: unknown) => (typeof v === 'string' && v.trim().length > 0 && v.length <= 40 ? v : null);
 app.get('/api/profile', async (req, res) => {
-  if (!stats) return void res.status(503).json({ error: 'Statistics are not available on this server' });
+  if (!stats) return void res.status(503).json({ error: 'Player statistics are switched off on this server (it needs a database: DATABASE_URL)' });
   if (apiLimited(req.ip ?? '?', 60)) return void res.status(429).json({ error: 'Too many requests' });
   const name = nameOf(req.query.name);
   if (!name) return void res.status(400).json({ error: 'Name required' });
@@ -99,7 +99,7 @@ app.get('/api/profile', async (req, res) => {
   }
 });
 app.post('/api/profile/protect', async (req, res) => {
-  if (!stats) return void res.status(503).json({ error: 'Statistics are not available on this server' });
+  if (!stats) return void res.status(503).json({ error: 'Player statistics are switched off on this server (it needs a database: DATABASE_URL)' });
   if (apiLimited(req.ip ?? '?', 10)) return void res.status(429).json({ error: 'Too many requests' });
   const name = nameOf(req.body?.name);
   if (!name) return void res.status(400).json({ error: 'Name required' });
@@ -108,7 +108,7 @@ app.post('/api/profile/protect', async (req, res) => {
   res.status(r.ok ? 200 : 403).json(r);
 });
 app.post('/api/profile/verify', async (req, res) => {
-  if (!stats) return void res.status(503).json({ error: 'Statistics are not available on this server' });
+  if (!stats) return void res.status(503).json({ error: 'Player statistics are switched off on this server (it needs a database: DATABASE_URL)' });
   if (apiLimited(req.ip ?? '?', 20)) return void res.status(429).json({ error: 'Too many requests' });
   const name = nameOf(req.body?.name);
   if (!name) return void res.status(400).json({ error: 'Name required' });
